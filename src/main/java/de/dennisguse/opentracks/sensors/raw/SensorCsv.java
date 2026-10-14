@@ -46,6 +46,7 @@ public final class SensorCsv {
     /** Same integers as {@code android.hardware.Sensor}. */
     public static final int TYPE_ACCELEROMETER = 1;
     public static final int TYPE_GYROSCOPE = 4;
+    public static final int TYPE_PRESSURE = 6;
     public static final int TYPE_GRAVITY = 9;
     public static final int TYPE_LINEAR_ACCELERATION = 10;
     public static final int TYPE_ROTATION_VECTOR = 11;
@@ -63,6 +64,8 @@ public final class SensorCsv {
                 return "TYPE_ACCELEROMETER";
             case TYPE_GYROSCOPE:
                 return "TYPE_GYROSCOPE";
+            case TYPE_PRESSURE:
+                return "TYPE_PRESSURE";
             case TYPE_GRAVITY:
                 return "TYPE_GRAVITY";
             case TYPE_LINEAR_ACCELERATION:

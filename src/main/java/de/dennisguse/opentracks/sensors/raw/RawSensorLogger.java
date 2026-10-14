@@ -72,7 +72,8 @@ public final class RawSensorLogger {
             Sensor.TYPE_GRAVITY,
             Sensor.TYPE_ROTATION_VECTOR,
             Sensor.TYPE_STEP_DETECTOR,
-            Sensor.TYPE_STEP_COUNTER
+            Sensor.TYPE_STEP_COUNTER,
+            Sensor.TYPE_PRESSURE // v0 = hPa
     };
 
     private final HandlerThread thread;

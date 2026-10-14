@@ -46,7 +46,8 @@ public final class WorkoutSplitsExporter {
         try {
             Context appContext = context.getApplicationContext();
             WorkoutRepository repository = WorkoutRepository.get(appContext);
-            if (!repository.hasWorkout(trackId)) {
+            List<PocketDetector.Event> pocketEvents = PocketStore.load(appContext, trackId);
+            if (!repository.hasWorkout(trackId) && pocketEvents == null) {
                 return;
             }
             Uri directoryUri = PreferencesUtils.getDefaultExportDirectoryUri();
@@ -61,6 +62,13 @@ public final class WorkoutSplitsExporter {
                 Log.w(TAG, "Track " + trackId.id() + " is missing; workout splits file was not written");
                 return;
             }
+            String filename = PreferencesUtils.getTrackFileformatGenerator().splitsFilename(track);
+            if (pocketEvents != null) {
+                write(appContext, directory, filename.replace("-splits.csv", "-pocket.csv"), PocketDetector.toCsv(pocketEvents));
+            }
+            if (!repository.hasWorkout(trackId)) {
+                return;
+            }
             List<RecordedSegment> recorded = repository.getTrackSegments(trackId);
             if (recorded.isEmpty()) {
                 return;
@@ -68,7 +76,11 @@ public final class WorkoutSplitsExporter {
             List<Sample> samples = TrackPointSamples.from(contentProviderUtils, trackId);
             WorkoutSplitCalculator.Result result = new WorkoutSplitCalculator().compute(recorded, samples);
             String text = WorkoutSplitsText.format(result);
-            String filename = PreferencesUtils.getTrackFileformatGenerator().splitsFilename(track);
+            if (pocketEvents != null) {
+                text += "\n# " + PocketDetector.summary(pocketEvents) + "\n"
+                        + "# out_of_pocket_count=" + pocketEvents.size()
+                        + ",out_of_pocket_total_s=" + Math.round(PocketDetector.totalMs(pocketEvents) / 1000.0) + "\n";
+            }
             DocumentFile file = directory.findFile(filename);
             if (file == null) {
                 file = directory.createFile("text/csv", filename);
@@ -87,6 +99,22 @@ public final class WorkoutSplitsExporter {
             Log.i(TAG, "Wrote workout splits to " + filename);
         } catch (IOException | RuntimeException e) {
             Log.w(TAG, "Workout splits file was not written", e);
+        }
+    }
+
+    private static void write(Context context, DocumentFile directory, String filename, String text) throws IOException {
+        DocumentFile file = directory.findFile(filename);
+        if (file == null) {
+            file = directory.createFile("text/csv", filename);
+        }
+        if (file == null) {
+            Log.w(TAG, "Could not create " + filename);
+            return;
+        }
+        try (OutputStream outputStream = context.getContentResolver().openOutputStream(file.getUri(), "wt")) {
+            if (outputStream != null) {
+                outputStream.write(text.getBytes(StandardCharsets.UTF_8));
+            }
         }
     }
 }

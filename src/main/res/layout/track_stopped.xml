@@ -168,6 +168,15 @@
 
                 </androidx.constraintlayout.widget.ConstraintLayout>
 
+                <TextView
+                    android:id="@+id/out_of_pocket"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="8dp"
+                    android:visibility="gone"
+                    tools:text="Out of pocket: 1 times, 0:18" />
+
             </LinearLayout>
         </ScrollView>
 

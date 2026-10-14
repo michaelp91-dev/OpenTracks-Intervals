@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Intervals build: store a GPS point about every second while walking/running (default upstream: 10 m). -->
+<resources>
+    <!-- Use the phone barometer for elevation gain/loss by default. -->
+    <string name="settings_sensor_pressure_default" translatable="false">@string/sensor_type_value_internal</string>
+    <string name="recording_distance_interval_default" translatable="false">1</string>
+    <string-array name="recording_distance_interval_values">
+        <item>@string/recording_distance_interval_default</item>
+        <item>2</item>
+        <item>5</item>
+        <item>10</item>
+        <item>20</item>
+        <item>50</item>
+        <item>100</item>
+    </string-array>
+</resources>

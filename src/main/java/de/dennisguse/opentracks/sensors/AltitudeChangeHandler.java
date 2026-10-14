@@ -44,6 +44,12 @@ public class AltitudeChangeHandler extends SensorHandler<AtmosphericPressure, Al
     }
 
     @Override
+    protected String getSensorPreferenceDefaultValue() {
+        // Intervals build: phone barometer on by default (upstream: none).
+        return getContext().getString(R.string.settings_sensor_pressure_default);
+    }
+
+    @Override
     protected int getSensorPreferenceKey() {
         return R.string.settings_sensor_bluetooth_pressure_key;
     }

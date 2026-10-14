@@ -17,11 +17,13 @@ import java.util.UUID;
 import de.dennisguse.opentracks.R;
 import de.dennisguse.opentracks.data.ContentProviderUtils;
 import de.dennisguse.opentracks.data.models.ActivityType;
+import de.dennisguse.opentracks.data.models.AltitudeGainLoss;
 import de.dennisguse.opentracks.data.models.Distance;
 import de.dennisguse.opentracks.data.models.Statistics;
 import de.dennisguse.opentracks.data.models.Track;
 import de.dennisguse.opentracks.data.models.TrackBuilder;
 import de.dennisguse.opentracks.data.models.TrackPoint;
+import de.dennisguse.opentracks.data.statistics.GpsAltitudeGainLoss;
 import de.dennisguse.opentracks.data.statistics.TrackStatisticsUpdater;
 import de.dennisguse.opentracks.sensors.sensorData.SensorDataSet;
 import de.dennisguse.opentracks.services.handlers.AltitudeCorrectionManager;
@@ -59,12 +61,18 @@ public class TrackRecordingManager implements SharedPreferences.OnSharedPreferen
     private TrackPoint lastStoredTrackPoint;
     private TrackPoint lastStoredTrackPointWithLocation;
 
+    // Fallback altitude gain/loss from GPS when the device has no barometer.
+    private final GpsAltitudeGainLoss gpsAltitudeGainLoss = new GpsAltitudeGainLoss();
+    private final boolean hasBarometer;
+
     TrackRecordingManager(Context context, TrackPointCreator trackPointCreator, IdleObserver idleObserver, Handler handler) {
         this.context = context;
         this.idleObserver = idleObserver;
         this.trackPointCreator = trackPointCreator;
         this.handler = handler;
         contentProviderUtils = new ContentProviderUtils(context);
+        android.hardware.SensorManager sensorManager = (android.hardware.SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
+        hasBarometer = sensorManager != null && sensorManager.getDefaultSensor(android.hardware.Sensor.TYPE_PRESSURE) != null;
     }
 
     synchronized Track.Id startNewTrack() {
@@ -262,6 +270,12 @@ public class TrackRecordingManager implements SharedPreferences.OnSharedPreferen
     }
 
     private void insertTrackPointHelper(@NonNull TrackPoint trackPoint) {
+        if (!hasBarometer && trackPoint.altitudeGainLoss() == null && trackPoint.position().hasAltitude()) {
+            AltitudeGainLoss gpsGainLoss = gpsAltitudeGainLoss.add(trackPoint.position().altitude().toM());
+            if (gpsGainLoss != null) {
+                trackPoint = trackPoint.with(gpsGainLoss);
+            }
+        }
         try {
             contentProviderUtils.insertTrackPoint(trackPoint, trackId);
             trackStatisticsUpdater.addTrackPoint(trackPoint);
@@ -288,6 +302,7 @@ public class TrackRecordingManager implements SharedPreferences.OnSharedPreferen
 
         lastStoredTrackPoint = null;
         lastStoredTrackPointWithLocation = null;
+        gpsAltitudeGainLoss.reset();
     }
 
     @Override

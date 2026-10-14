@@ -141,6 +141,12 @@ public class TrackStoppedActivity extends AbstractTrackDeleteActivity implements
 
         viewBinding.time.setText(StringUtils.formatElapsedTime(track.statistics().movingDuration()));
 
+        java.util.List<de.dennisguse.opentracks.workout.PocketDetector.Event> pocketEvents = de.dennisguse.opentracks.workout.PocketStore.load(this, trackId);
+        if (pocketEvents != null) {
+            viewBinding.outOfPocket.setText(de.dennisguse.opentracks.workout.PocketDetector.summary(pocketEvents));
+            viewBinding.outOfPocket.setVisibility(android.view.View.VISIBLE);
+        }
+
         {
             Pair<String, String> parts = SpeedFormatter.Builder()
                     .setUnit(PreferencesUtils.getUnitSystem())

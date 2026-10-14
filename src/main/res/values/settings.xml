@@ -29,6 +29,7 @@
     <string name="settings_sensor_gps_key" translatable="false">bluetoothGPSSensor</string>
     <string name="sensor_type_value_none" translatable="false">NONE</string>
     <string name="sensor_type_value_internal" translatable="false">INTERNAL</string>
+    <string name="settings_sensor_pressure_default" translatable="false">@string/sensor_type_value_none</string>
     <string-array name="sensor_type_no_bluetooth_entryValues">
         <item>@string/sensor_type_value_none</item>
         <item>@string/sensor_type_value_internal</item>
