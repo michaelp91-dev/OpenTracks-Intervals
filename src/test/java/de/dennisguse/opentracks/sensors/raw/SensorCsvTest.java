@@ -40,12 +40,12 @@ public class SensorCsvTest {
     }
 
     @Test
-    public void sampleKeepsFiveValueColumns() {
+    public void sampleKeepsSixValueColumns() {
         String line = SensorCsv.formatSample(1000L, 2000L, "TYPE_ACCELEROMETER", new float[]{1.5f, -2f, 3f});
-        assertEquals("1000,2000,TYPE_ACCELEROMETER,1.5,-2.0,3.0,,\n", line);
+        assertEquals("1000,2000,TYPE_ACCELEROMETER,1.5,-2.0,3.0,,,\n", line);
 
-        String rotation = SensorCsv.formatSample(1L, 2L, "TYPE_ROTATION_VECTOR", new float[]{0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 9f});
-        assertEquals("1,2,TYPE_ROTATION_VECTOR,0.1,0.2,0.3,0.4,0.5\n", rotation);
+        String rotation = SensorCsv.formatSample(1L, 2L, "TYPE_ROTATION_VECTOR", new float[]{0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 9f, 7f});
+        assertEquals("1,2,TYPE_ROTATION_VECTOR,0.1,0.2,0.3,0.4,0.5,9.0\n", rotation);
     }
 
     @Test
@@ -131,5 +131,12 @@ public class SensorCsvTest {
         assertEquals(9_999_999L, parsed.get("TYPE_GYROSCOPE").count);
         assertFalse(SensorCsv.needsActivityRecognition(SensorCsv.TYPE_ACCELEROMETER));
         assertTrue(SensorCsv.needsActivityRecognition(SensorCsv.TYPE_STEP_COUNTER));
+    }
+
+    @Test
+    public void formatSample_uncalibratedMagnetometer_keepsBias() {
+        String line = SensorCsv.formatSample(1, 2, SensorCsv.nameFor(14), new float[]{1f, 2f, 3f, 0.5f, 0.25f, -1f});
+        assertEquals("1,2,TYPE_MAGNETIC_FIELD_UNCALIBRATED,1.0,2.0,3.0,0.5,0.25,-1.0\n", line);
+        assertEquals("# accuracy sensor=TYPE_MAGNETIC_FIELD accuracy=3 wall_time_ms=5\n", SensorCsv.accuracyMarker(SensorCsv.nameFor(2), 3, 5));
     }
 }

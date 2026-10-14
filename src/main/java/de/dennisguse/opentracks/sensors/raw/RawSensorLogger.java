@@ -73,7 +73,9 @@ public final class RawSensorLogger {
             Sensor.TYPE_ROTATION_VECTOR,
             Sensor.TYPE_STEP_DETECTOR,
             Sensor.TYPE_STEP_COUNTER,
-            Sensor.TYPE_PRESSURE // v0 = hPa
+            Sensor.TYPE_PRESSURE, // v0 = hPa
+            Sensor.TYPE_MAGNETIC_FIELD, // v0..v2 = uT
+            Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED // v0..v2 = uT, v3..v5 = bias uT
     };
 
     private final HandlerThread thread;
@@ -108,7 +110,7 @@ public final class RawSensorLogger {
             if (!running || file == null || event == null || event.sensor == null) {
                 return;
             }
-            int count = Math.min(event.values.length, 5);
+            int count = Math.min(event.values.length, SensorCsv.MAX_VALUES);
             float[] copy = new float[count];
             System.arraycopy(event.values, 0, copy, 0, count);
             long timestampNs = event.timestamp;
@@ -129,6 +131,11 @@ public final class RawSensorLogger {
 
         @Override
         public void onAccuracyChanged(Sensor sensor, int accuracy) {
+            // Called on the logger thread; 0..3 = SENSOR_STATUS_UNRELIABLE..ACCURACY_HIGH.
+            if (!running || file == null || sensor == null) {
+                return;
+            }
+            buffer.append(SensorCsv.accuracyMarker(SensorCsv.nameFor(sensor.getType()), accuracy, System.currentTimeMillis()));
         }
     };
 

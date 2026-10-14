@@ -39,14 +39,16 @@ public final class SensorCsv {
     /** Intervals longer than this are a pause or a stopped recording, not the sensor's rate. */
     public static final long GAP_NS = 1_000_000_000L;
 
-    public static final String COLUMNS = "timestamp_ns,wall_time_ms,sensor,v0,v1,v2,v3,v4";
+    public static final String COLUMNS = "timestamp_ns,wall_time_ms,sensor,v0,v1,v2,v3,v4,v5";
     public static final String RATE_MARKER = "# sampling_rate_hz=";
     public static final String STATS_MARKER = "# sample_stats=";
 
     /** Same integers as {@code android.hardware.Sensor}. */
     public static final int TYPE_ACCELEROMETER = 1;
     public static final int TYPE_GYROSCOPE = 4;
+    public static final int TYPE_MAGNETIC_FIELD = 2;
     public static final int TYPE_PRESSURE = 6;
+    public static final int TYPE_MAGNETIC_FIELD_UNCALIBRATED = 14;
     public static final int TYPE_GRAVITY = 9;
     public static final int TYPE_LINEAR_ACCELERATION = 10;
     public static final int TYPE_ROTATION_VECTOR = 11;
@@ -64,6 +66,10 @@ public final class SensorCsv {
                 return "TYPE_ACCELEROMETER";
             case TYPE_GYROSCOPE:
                 return "TYPE_GYROSCOPE";
+            case TYPE_MAGNETIC_FIELD:
+                return "TYPE_MAGNETIC_FIELD";
+            case TYPE_MAGNETIC_FIELD_UNCALIBRATED:
+                return "TYPE_MAGNETIC_FIELD_UNCALIBRATED";
             case TYPE_PRESSURE:
                 return "TYPE_PRESSURE";
             case TYPE_GRAVITY:
@@ -120,6 +126,13 @@ public final class SensorCsv {
                 + "\n";
     }
 
+    /** Uncalibrated magnetometer: x,y,z then bias x,y,z (uT). */
+    public static final int MAX_VALUES = 6;
+
+    public static String accuracyMarker(String sensor, int accuracy, long wallTimeMs) {
+        return "# accuracy sensor=" + sensor + " accuracy=" + accuracy + " wall_time_ms=" + wallTimeMs + "\n";
+    }
+
     public static String marker(String kind, long wallTimeMs) {
         return "# " + kind + " wall_time_ms=" + wallTimeMs + "\n";
     }
@@ -127,8 +140,8 @@ public final class SensorCsv {
     public static String formatSample(long timestampNs, long wallTimeMs, String sensor, float[] values) {
         StringBuilder line = new StringBuilder(96);
         line.append(timestampNs).append(',').append(wallTimeMs).append(',').append(sensor);
-        int count = values == null ? 0 : Math.min(values.length, 5);
-        for (int i = 0; i < 5; i++) {
+        int count = values == null ? 0 : Math.min(values.length, MAX_VALUES);
+        for (int i = 0; i < MAX_VALUES; i++) {
             line.append(',');
             if (i < count && !Float.isNaN(values[i]) && !Float.isInfinite(values[i])) {
                 line.append(Float.toString(values[i]));
