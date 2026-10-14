@@ -241,8 +241,16 @@ public class TrackRecordingActivity extends AbstractActivity implements ChooseAc
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        TrackStoppedActivity.setAppForeground(false);
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        TrackStoppedActivity.setAppForeground(true);
+        TrackStoppedActivity.showPendingReview(this);
 
         // Update UI
         invalidateOptionsMenu();

@@ -116,8 +116,12 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         Log.i(TAG, "Auto-stopping recording because the workout finished");
         Track.Id finishedTrackId = TrackRecordingService.this.recordingStatus.trackId();
         endCurrentTrack();
-        // No UI may be visible (screen off), so save the track (KMZ + readings CSV) from here.
-        ExportUtils.postTrackExport(this, finishedTrackId);
+        // Let the user review (rename) the track first; TrackStoppedActivity exports it afterwards.
+        PendingReviewStorage.set(this, finishedTrackId);
+        Intent review = new Intent(TrackRecordingService.this, de.dennisguse.opentracks.TrackStoppedActivity.class)
+                .putExtra(de.dennisguse.opentracks.TrackStoppedActivity.EXTRA_TRACK_ID, finishedTrackId)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        de.dennisguse.opentracks.TrackStoppedActivity.showPendingReviewIfForeground(TrackRecordingService.this, review);
         stopSelf();
     };
 
@@ -527,7 +531,7 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         if (rawSensorLogger != null) {
             rawSensorLogger.stop();
         }
-        WorkoutSplitsExporter.export(this, finishedTrackId);
+        // Splits are exported after the track got its final name (TrackStoppedActivity).
         if (notificationManager != null) {
             notificationManager.setWorkoutStatus(null);
         }

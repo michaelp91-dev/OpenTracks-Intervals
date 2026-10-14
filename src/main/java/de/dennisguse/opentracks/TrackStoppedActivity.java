@@ -35,9 +35,78 @@ public class TrackStoppedActivity extends AbstractTrackDeleteActivity implements
 
     private Track.Id trackId;
 
+    private boolean handled = false;
+
+    private static int foregroundActivities = 0;
+    private static boolean showing = false;
+
+    /** Called by activities in onResume/onPause to know whether the app is in the foreground. */
+    public static void setAppForeground(boolean resumed) {
+        foregroundActivities = Math.max(0, foregroundActivities + (resumed ? 1 : -1));
+    }
+
+    public static void showPendingReviewIfForeground(android.content.Context context, Intent intent) {
+        if (foregroundActivities > 0 && !showing) {
+            context.startActivity(intent);
+        }
+    }
+
+    /** Opens the review screen for a workout that finished automatically (if any). */
+    public static void showPendingReview(android.app.Activity activity) {
+        Track.Id pending = de.dennisguse.opentracks.services.PendingReviewStorage.get(activity);
+        if (pending == null || showing) {
+            return;
+        }
+        if (new ContentProviderUtils(activity).getTrack(pending) == null) {
+            de.dennisguse.opentracks.services.PendingReviewStorage.unset(activity);
+            return;
+        }
+        activity.startActivity(IntentUtils.newIntent(activity, TrackStoppedActivity.class)
+                .putExtra(EXTRA_TRACK_ID, pending));
+    }
+
+    private boolean isPendingReview() {
+        return trackId != null && trackId.equals(de.dennisguse.opentracks.services.PendingReviewStorage.get(this));
+    }
+
+    /** Export everything (KMZ, readings CSV, splits CSV) with the final track name. */
+    private void exportFinal() {
+        handled = true;
+        de.dennisguse.opentracks.services.PendingReviewStorage.unset(this);
+        de.dennisguse.opentracks.workout.WorkoutSplitsExporter.export(this, trackId);
+        ExportUtils.postWorkoutExport(this, trackId);
+        HealthConnectUtils.postExportTrack(this, trackId);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        setAppForeground(true);
+    }
+
+    @Override
+    protected void onPause() {
+        setAppForeground(false);
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (!handled && isFinishing() && isPendingReview() && new ContentProviderUtils(this).getTrack(trackId) != null) {
+            // Left without pressing finish: keep the automatic name but still save the files.
+            handled = true;
+            de.dennisguse.opentracks.services.PendingReviewStorage.unset(this);
+            de.dennisguse.opentracks.workout.WorkoutSplitsExporter.export(this, trackId);
+            ExportUtils.postTrackExport(this, trackId);
+        }
+        showing = false;
+        super.onDestroy();
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        showing = true;
 
         trackId = getIntent().getParcelableExtra(EXTRA_TRACK_ID);
         if (trackId == null) {
@@ -93,13 +162,14 @@ public class TrackStoppedActivity extends AbstractTrackDeleteActivity implements
 
         viewBinding.finishButton.setOnClickListener(v -> {
             storeTrackMetaData(contentProviderUtils, track);
-            ExportUtils.postWorkoutExport(this, trackId);
-            HealthConnectUtils.postExportTrack(this, trackId);
+            exportFinal();
             finish();
         });
 
         viewBinding.resumeButton.setOnClickListener(v -> {
             storeTrackMetaData(contentProviderUtils, track);
+            handled = true;
+            de.dennisguse.opentracks.services.PendingReviewStorage.unset(this);
             resumeTrackAndFinish();
         });
 
@@ -154,6 +224,8 @@ public class TrackStoppedActivity extends AbstractTrackDeleteActivity implements
 
     @Override
     public void onDeleteFinished() {
+        handled = true;
+        de.dennisguse.opentracks.services.PendingReviewStorage.unset(this);
         finish();
     }
 
