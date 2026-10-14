@@ -1,5 +1,6 @@
 /*
  * Copyright 2008 Google Inc.
+ * Modified by Michael Puckett, 2026
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -61,6 +62,7 @@ import de.dennisguse.opentracks.ui.TrackListAdapter;
 import de.dennisguse.opentracks.ui.aggregatedStatistics.AggregatedStatisticsActivity;
 import de.dennisguse.opentracks.ui.aggregatedStatistics.ConfirmDeleteDialogFragment;
 import de.dennisguse.opentracks.ui.markers.MarkerListActivity;
+import de.dennisguse.opentracks.ui.workout.WorkoutsActivity;
 import de.dennisguse.opentracks.ui.util.ActivityUtils;
 import de.dennisguse.opentracks.ui.util.RecyclerViewSwipeDeleteCallback;
 import de.dennisguse.opentracks.util.IntentUtils;
@@ -133,6 +135,8 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
     private String searchQuery;
 
     private final TrackRecordingServiceConnection.Callback bindChangedCallback = (service, unused) -> {
+        service.recoverUnfinishedTrack();
+
         service.getRecordingStatusObservable()
                 .observe(TrackListActivity.this, this::onRecordingStatusChanged);
 
@@ -187,11 +191,21 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
             Log.i(TAG, "Starting recording");
             updateGpsMenuItem(false, true);
             startSensorsOrRecording((service, connection) -> {
-                Track.Id trackId = service.startNewTrack();
-
-                Intent newIntent = IntentUtils.newIntent(TrackListActivity.this, TrackRecordingActivity.class);
-                newIntent.putExtra(TrackRecordingActivity.EXTRA_TRACK_ID, trackId);
-                startActivity(newIntent);
+                switch (service.requestStart(null)) {
+                    case COUNTDOWN_STARTED, ALREADY_BUSY -> {
+                        if (service.isStartCountdownRunning()) {
+                            startActivity(IntentUtils.newIntent(TrackListActivity.this, StartCountdownActivity.class));
+                        } else {
+                            Toast.makeText(TrackListActivity.this, getString(R.string.hold_to_stop), Toast.LENGTH_LONG).show();
+                        }
+                    }
+                    case START_IMMEDIATELY -> {
+                        Track.Id trackId = service.startNewTrack();
+                        Intent newIntent = IntentUtils.newIntent(TrackListActivity.this, TrackRecordingActivity.class);
+                        newIntent.putExtra(TrackRecordingActivity.EXTRA_TRACK_ID, trackId);
+                        startActivity(newIntent);
+                    }
+                }
             });
         });
         viewBinding.trackListFabAction.setOnLongClickListener((view) -> {
@@ -213,7 +227,12 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
     }
 
     private void requestRequiredPermissions() {
-        PermissionRequester.ALL.requestPermissionsIfNeeded(this, this, null, (requester) -> Toast.makeText(this, R.string.permission_recording_failed, Toast.LENGTH_LONG).show());
+        PermissionRequester.ALL.requestPermissionsIfNeeded(this, this, null, (requester) -> {
+            // Activity recognition is only for the step sensors. Denying it must not block a recording.
+            if (!PermissionRequester.RECORDING.hasPermission(this) || !PermissionRequester.NOTIFICATION.hasPermission(this)) {
+                Toast.makeText(this, R.string.permission_recording_failed, Toast.LENGTH_LONG).show();
+            }
+        });
     }
 
     @Override
@@ -282,6 +301,11 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
+        if (item.getItemId() == R.id.track_list_workouts) {
+            startActivity(IntentUtils.newIntent(this, WorkoutsActivity.class));
+            return true;
+        }
+
         if (item.getItemId() == R.id.track_list_markers) {
             startActivity(IntentUtils.newIntent(this, MarkerListActivity.class));
             return true;

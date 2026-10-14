@@ -1,3 +1,4 @@
+// Modified by Michael Puckett, 2026
 apply plugin: 'com.android.application'
 
 buildscript {
@@ -131,6 +132,13 @@ android {
 
             signingConfig = signingConfigs.release
         }
+        intervals {
+            // Personal fork: OpenTracks + interval workouts. Installs alongside upstream.
+            dimension 'version'
+            applicationId 'dev.mpuckett.opentracks.intervals'
+            versionNameSuffix '-intervals'
+            base.archivesName = "opentracks-intervals"
+        }
     }
 
     dependenciesInfo {
@@ -165,6 +173,8 @@ dependencies {
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.7.0'
 
     androidTestUtil 'androidx.test:orchestrator:1.6.1'
+
+    testImplementation 'junit:junit:4.13.2'
 }
 
 androidComponents {

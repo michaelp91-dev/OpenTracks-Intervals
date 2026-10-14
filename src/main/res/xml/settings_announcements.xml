@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?><!-- Modified by Michael Puckett, 2026 -->
 
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -87,6 +87,21 @@
             android:defaultValue="false"
             android:key="@string/voice_announce_lap_power_key"
             android:title="@string/settings_announcements_lap_power" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/workout_cues_category">
+        <SwitchPreferenceCompat
+            android:defaultValue="@bool/workout_cue_beep_default"
+            android:key="@string/workout_cue_beep_key"
+            android:title="@string/workout_cue_beep_title" />
+        <SwitchPreferenceCompat
+            android:defaultValue="@bool/workout_cue_vibrate_default"
+            android:key="@string/workout_cue_vibrate_key"
+            android:title="@string/workout_cue_vibrate_title" />
+        <SwitchPreferenceCompat
+            android:defaultValue="@bool/workout_auto_stop_default"
+            android:key="@string/workout_auto_stop_key"
+            android:title="@string/workout_auto_stop_title" />
     </PreferenceCategory>
 
 </PreferenceScreen>

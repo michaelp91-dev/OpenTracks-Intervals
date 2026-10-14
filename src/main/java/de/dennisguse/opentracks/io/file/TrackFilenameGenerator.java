@@ -1,3 +1,6 @@
+/*
+ * Modified by Michael Puckett, 2026
+ */
 package de.dennisguse.opentracks.io.file;
 
 import androidx.annotation.NonNull;
@@ -38,7 +41,11 @@ public class TrackFilenameGenerator {
         this.template = template;
     }
 
-    public String format(@NonNull Track track, @NonNull TrackFileFormat trackFileFormat) {
+    /**
+     * Stem shared by the track export, the splits CSV, and the sensor readings CSV.
+     * Date, time, and track name come from the same template, then the same sanitizer.
+     */
+    public String baseName(@NonNull Track track) {
         Map<String, String> values = new HashMap<>();
 
         values.put(UUID_KEY, track.uuid().toString().substring(0, 8));
@@ -47,7 +54,19 @@ public class TrackFilenameGenerator {
         values.put(STARTTIME_TIME_KEY, track.startTime().toLocalTime().toString());
         values.put(STARTTIME_DATE_KEY, track.stopTime().toLocalDate().toString());
 
-        return format(format(template, values), trackFileFormat);
+        return FileUtils.sanitizeFileName(format(template, values));
+    }
+
+    public String format(@NonNull Track track, @NonNull TrackFileFormat trackFileFormat) {
+        return baseName(track) + "." + trackFileFormat.getExtension();
+    }
+
+    public String splitsFilename(@NonNull Track track) {
+        return baseName(track) + "-splits.csv";
+    }
+
+    public String readingsFilename(@NonNull Track track) {
+        return baseName(track) + "-readings.csv";
     }
 
     private static String format(String template, Map<String, String> values) {

@@ -1,3 +1,4 @@
+/* Modified by Michael Puckett, 2026 */
 package de.dennisguse.opentracks;
 
 import android.app.AlertDialog;
@@ -13,12 +14,15 @@ import android.view.WindowManager;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentActivity;
+import androidx.lifecycle.LiveData;
+import androidx.lifecycle.Observer;
 import androidx.viewpager2.adapter.FragmentStateAdapter;
 
 import com.google.android.material.snackbar.Snackbar;
@@ -51,6 +55,8 @@ import de.dennisguse.opentracks.ui.markers.MarkerEditActivity;
 import de.dennisguse.opentracks.ui.markers.MarkerListActivity;
 import de.dennisguse.opentracks.ui.util.ActivityUtils;
 import de.dennisguse.opentracks.util.IntentUtils;
+import de.dennisguse.opentracks.workout.WorkoutBanner;
+import de.dennisguse.opentracks.workout.WorkoutState;
 
 /**
  * An activity to show the track detail, record a new track or resumes an existing one.
@@ -79,12 +85,31 @@ public class TrackRecordingActivity extends AbstractActivity implements ChooseAc
 
     private RecordingStatus recordingStatus = TrackRecordingService.STATUS_DEFAULT;
 
+    private LiveData<WorkoutState> observedWorkoutState;
+
+    private boolean sawRecording;
+
+    private boolean openingStoppedScreen;
+
+    private final Observer<WorkoutState> workoutStateObserver = this::onWorkoutStateChanged;
+
     private final TrackRecordingServiceConnection.Callback bindChangedCallback = (service, unused) -> {
         service.getRecordingStatusObservable()
                 .observe(TrackRecordingActivity.this, this::onRecordingStatusChanged);
 
         service.getGpsStatusObservable()
                 .observe(TrackRecordingActivity.this, this::onGpsStatusChanged);
+
+        LiveData<WorkoutState> workoutState = service.getWorkoutStateObservable();
+        if (observedWorkoutState != null && observedWorkoutState != workoutState) {
+            observedWorkoutState.removeObserver(workoutStateObserver);
+        }
+        observedWorkoutState = workoutState;
+        if (workoutState != null) {
+            workoutState.observe(TrackRecordingActivity.this, workoutStateObserver);
+        } else {
+            onWorkoutStateChanged(null);
+        }
 
         if (!service.isRecording()) {
             finish();
@@ -140,6 +165,7 @@ public class TrackRecordingActivity extends AbstractActivity implements ChooseAc
         viewBinding.trackRecordingFabAction.setBackgroundColor(ContextCompat.getColor(this, R.color.opentracks));
         viewBinding.trackRecordingFabAction.setOnLongClickListener((view) -> {
             ActivityUtils.vibrate(this, Duration.ofSeconds(1));
+            openingStoppedScreen = true;
             trackRecordingServiceConnection.stopRecording(TrackRecordingActivity.this);
             Intent newIntent = IntentUtils.newIntent(TrackRecordingActivity.this, TrackStoppedActivity.class)
                     .putExtra(TrackStoppedActivity.EXTRA_TRACK_ID, trackId);
@@ -371,8 +397,25 @@ public class TrackRecordingActivity extends AbstractActivity implements ChooseAc
         }
     }
 
+    private void onWorkoutStateChanged(@Nullable WorkoutState state) {
+        if (viewBinding == null) {
+            return;
+        }
+        if (state == null) {
+            viewBinding.workoutStatus.setVisibility(View.GONE);
+            return;
+        }
+        viewBinding.workoutStatus.setText(WorkoutBanner.format(this, state));
+        viewBinding.workoutStatus.setVisibility(View.VISIBLE);
+    }
+
     private void onRecordingStatusChanged(RecordingStatus status) {
-        if (!status.isRecording()) {
+        if (status.isRecording()) {
+            sawRecording = true;
+        } else if (sawRecording) {
+            openStoppedScreen();
+            finish();
+        } else {
             finish();
         }
         recordingStatus = status;
@@ -381,6 +424,15 @@ public class TrackRecordingActivity extends AbstractActivity implements ChooseAc
 
         setLockscreenPolicy();
         setScreenOnPolicy();
+    }
+
+    private void openStoppedScreen() {
+        if (openingStoppedScreen || trackId == null || isFinishing()) {
+            return;
+        }
+        openingStoppedScreen = true;
+        startActivity(IntentUtils.newIntent(this, TrackStoppedActivity.class)
+                .putExtra(TrackStoppedActivity.EXTRA_TRACK_ID, trackId));
     }
 
     private void onGpsStatusChanged(GpsStatusValue gpsStatusValue) {

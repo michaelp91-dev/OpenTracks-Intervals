@@ -1,5 +1,6 @@
 /*
  * Copyright 2012 Google Inc.
+ * Modified by Michael Puckett, 2026
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -335,6 +336,37 @@ public class PreferencesUtils {
     public static boolean shouldVoiceAnnouncementOnDeviceSpeaker() {
         final boolean DEFAULT = resources.getBoolean(R.bool.voice_on_device_speaker_default);
         return getBoolean(R.string.voice_on_device_speaker_key, DEFAULT);
+    }
+
+    public static boolean shouldWorkoutCueBeep() {
+        final boolean DEFAULT = resources.getBoolean(R.bool.workout_cue_beep_default);
+        return getBoolean(R.string.workout_cue_beep_key, DEFAULT);
+    }
+
+    public static boolean shouldWorkoutCueVibrate() {
+        final boolean DEFAULT = resources.getBoolean(R.bool.workout_cue_vibrate_default);
+        return getBoolean(R.string.workout_cue_vibrate_key, DEFAULT);
+    }
+
+    public static boolean shouldWorkoutAutoStop() {
+        final boolean DEFAULT = resources.getBoolean(R.bool.workout_auto_stop_default);
+        return getBoolean(R.string.workout_auto_stop_key, DEFAULT);
+    }
+
+    public static boolean shouldRecordSensorData() {
+        final boolean DEFAULT = resources.getBoolean(R.bool.record_sensor_data_default);
+        return getBoolean(R.string.record_sensor_data_key, DEFAULT);
+    }
+
+    /** Seconds to wait before a recording starts. 0 starts immediately. */
+    public static int getStartCountdownSeconds() {
+        int fallback = 5;
+        try {
+            fallback = Integer.parseInt(resources.getString(R.string.start_countdown_default));
+        } catch (NumberFormatException ignored) {
+            // Keep the fallback.
+        }
+        return Math.max(0, getInt(R.string.start_countdown_key, fallback));
     }
 
     public static boolean shouldVoiceAnnouncementIdle() {

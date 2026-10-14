@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?><!--
 Copyright 2011 Google Inc.
+Modified by Michael Puckett, 2026
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,6 +27,10 @@ limitations under the License.
         android:orderInCategory="4"
         app:showAsAction="ifRoom"
         android:title="@string/menu_share" />
+    <item
+        android:id="@+id/track_detail_export_sensors"
+        android:orderInCategory="4"
+        android:title="@string/sensor_export_title" />
     <item
         android:id="@+id/track_detail_markers"
         android:icon="@drawable/ic_marker_show_24dp"

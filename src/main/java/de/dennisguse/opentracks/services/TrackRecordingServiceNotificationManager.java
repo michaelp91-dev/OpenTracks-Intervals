@@ -1,3 +1,6 @@
+/*
+ * Modified by Michael Puckett, 2026
+ */
 package de.dennisguse.opentracks.services;
 
 import android.app.Notification;
@@ -10,11 +13,13 @@ import android.content.SharedPreferences;
 import android.os.Build;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.TaskStackBuilder;
 
 import de.dennisguse.opentracks.R;
+import de.dennisguse.opentracks.StartCountdownActivity;
 import de.dennisguse.opentracks.TrackListActivity;
 import de.dennisguse.opentracks.TrackRecordingActivity;
 import de.dennisguse.opentracks.data.models.Distance;
@@ -41,6 +46,12 @@ class TrackRecordingServiceNotificationManager implements SharedPreferences.OnSh
     private boolean previousLocationWasAccurate = true;
 
     private UnitSystem unitSystem = null;
+
+    @Nullable
+    private String workoutStatus;
+
+    @Nullable
+    private String speedText;
 
     TrackRecordingServiceNotificationManager(Context context) {
         notificationManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -97,8 +108,29 @@ class TrackRecordingServiceNotificationManager implements SharedPreferences.OnSh
                 .addNextIntent(intent)
                 .getPendingIntent(0, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
+        notificationBuilder.setContentTitle(context.getString(R.string.app_name));
+        notificationBuilder.setContentText(null);
         notificationBuilder.setContentIntent(pendingIntent);
         updateNotification();
+    }
+
+    /**
+     * @param notify false until the service is in the foreground, so the first post goes through startForeground
+     */
+    Notification showCountdown(Context context, String label, boolean notify) {
+        Intent intent = IntentUtils.newIntent(context, StartCountdownActivity.class);
+        PendingIntent pendingIntent = TaskStackBuilder.create(context)
+                .addParentStack(TrackListActivity.class)
+                .addNextIntent(intent)
+                .getPendingIntent(0, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
+        notificationBuilder.setContentIntent(pendingIntent);
+        notificationBuilder.setContentTitle(context.getString(R.string.start_countdown_title));
+        notificationBuilder.setContentText(label);
+        if (notify) {
+            updateNotification();
+        }
+        return getNotification();
     }
 
     void updateTrackPoint(Context context, RecordingData recordingData, Distance thresholdHorizontalAccuracy) {
@@ -120,11 +152,26 @@ class TrackRecordingServiceNotificationManager implements SharedPreferences.OnSh
 
         notificationBuilder.setContentTitle(context.getString(R.string.track_distance_notification, formatter.formatDistance(recordingData.trackStatistics().totalDistance())));
         String formattedSpeed = SpeedFormatter.Builder().setUnit(unitSystem).setReportSpeedOrPace(true).build(context).formatSpeed(recordingData.latestTrackPoint().position().speed());
-        notificationBuilder.setContentText(context.getString(R.string.track_speed_notification, formattedSpeed));
+        speedText = context.getString(R.string.track_speed_notification, formattedSpeed);
+        applyBodyText();
         notificationBuilder.setSubText(context.getString(R.string.track_recording_notification_accuracy, formattedAccuracy));
         updateNotification();
 
         notificationBuilder.setOnlyAlertOnce(true);
+    }
+
+    void setWorkoutStatus(@Nullable String status) {
+        workoutStatus = status;
+        applyBodyText();
+        updateNotification();
+    }
+
+    private void applyBodyText() {
+        if (workoutStatus != null) {
+            notificationBuilder.setContentText(workoutStatus);
+        } else if (speedText != null) {
+            notificationBuilder.setContentText(speedText);
+        }
     }
 
     void stop() {

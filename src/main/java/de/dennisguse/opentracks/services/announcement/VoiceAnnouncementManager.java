@@ -1,5 +1,6 @@
 /*
  * Copyright 2010 Google Inc.
+ * Modified by Michael Puckett, 2026
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -79,8 +80,10 @@ public class VoiceAnnouncementManager implements SharedPreferences.OnSharedPrefe
     }
 
     public void start(@Nullable Statistics trackStatistics) {
-        voiceAnnouncement = new TTSManager(context);
-        voiceAnnouncement.start();
+        if (voiceAnnouncement == null) {
+            voiceAnnouncement = new TTSManager(context);
+            voiceAnnouncement.start();
+        }
         update(trackStatistics);
     }
 
@@ -166,6 +169,23 @@ public class VoiceAnnouncementManager implements SharedPreferences.OnSharedPrefe
             voiceAnnouncement.stop();
             voiceAnnouncement = null;
         }
+    }
+
+    /**
+     * Workout cues ignore the device-speaker preference so a run is never silent.
+     * {@link TTSManager#speak} still skips speech during a phone call.
+     */
+    public void announceWorkoutCue(@NonNull CharSequence text) {
+        if (voiceAnnouncement == null) {
+            Log.w(TAG, "Cannot announce workout cue; TTS is stopped.");
+            return;
+        }
+        Log.i(TAG, "Workout cue: " + text);
+        voiceAnnouncement.speak(text);
+    }
+
+    public boolean isTtsReady() {
+        return voiceAnnouncement != null && voiceAnnouncement.isReady();
     }
 
     public void setFrequency(Duration frequency) {

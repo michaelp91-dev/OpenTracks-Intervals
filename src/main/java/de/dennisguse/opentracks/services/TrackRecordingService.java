@@ -1,5 +1,6 @@
 /*
  * Copyright 2008 Google Inc.
+ * Modified by Michael Puckett, 2026
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,12 +17,14 @@
 
 package de.dennisguse.opentracks.services;
 
+import android.app.Notification;
 import android.app.Service;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
@@ -34,15 +37,29 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.time.Duration;
 
+import de.dennisguse.opentracks.R;
 import de.dennisguse.opentracks.data.ContentProviderUtils;
+import de.dennisguse.opentracks.data.models.ActivityType;
 import de.dennisguse.opentracks.data.models.Distance;
 import de.dennisguse.opentracks.data.models.Marker;
 import de.dennisguse.opentracks.data.models.Track;
+import de.dennisguse.opentracks.data.models.TrackBuilder;
 import de.dennisguse.opentracks.data.models.TrackPoint;
+import de.dennisguse.opentracks.io.file.exporter.ExportUtils;
 import de.dennisguse.opentracks.sensors.GpsStatusValue;
+import de.dennisguse.opentracks.sensors.raw.RawSensorLogger;
 import de.dennisguse.opentracks.services.announcement.VoiceAnnouncementManager;
 import de.dennisguse.opentracks.services.handlers.TrackPointCreator;
 import de.dennisguse.opentracks.settings.PreferencesUtils;
+import de.dennisguse.opentracks.util.SystemUtils;
+import de.dennisguse.opentracks.workout.CuePlayer;
+import de.dennisguse.opentracks.workout.Workout;
+import de.dennisguse.opentracks.workout.WorkoutBanner;
+import de.dennisguse.opentracks.workout.WorkoutController;
+import de.dennisguse.opentracks.workout.WorkoutRepository;
+import de.dennisguse.opentracks.workout.WorkoutSessionStore;
+import de.dennisguse.opentracks.workout.WorkoutSplitsExporter;
+import de.dennisguse.opentracks.workout.WorkoutState;
 
 public class TrackRecordingService extends Service implements TrackPointCreator.Callback, SharedPreferences.OnSharedPreferenceChangeListener, TrackRecordingManager.IdleObserver {
 
@@ -51,8 +68,17 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
     @VisibleForTesting
     public static final Duration RECORDING_DATA_UPDATE_INTERVAL = Duration.ofSeconds(1);
 
+    /** Long enough for "Workout complete" to be spoken before TTS is shut down. */
+    private static final long WORKOUT_AUTO_STOP_DELAY_MS = 2500;
+
     public static final RecordingStatus STATUS_DEFAULT = RecordingStatus.notRecording();
     public static final GpsStatusValue STATUS_GPS_DEFAULT = GpsStatusValue.GPS_NONE;
+
+    public enum StartGate {
+        COUNTDOWN_STARTED,
+        START_IMMEDIATELY,
+        ALREADY_BUSY
+    }
 
     public TrackPoint getLastStoredTrackPointWithLocation() {
         return trackRecordingManager.getLastStoredTrackPointWithLocation();
@@ -80,6 +106,21 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         }
     };
 
+    private boolean workoutAutoStopScheduled;
+
+    private final Runnable autoStopFinishedWorkout = () -> {
+        if (!isRecording() || !PreferencesUtils.shouldWorkoutAutoStop()) {
+            workoutAutoStopScheduled = false;
+            return;
+        }
+        Log.i(TAG, "Auto-stopping recording because the workout finished");
+        Track.Id finishedTrackId = TrackRecordingService.this.recordingStatus.trackId();
+        endCurrentTrack();
+        // No UI may be visible (screen off), so save the track (KMZ + readings CSV) from here.
+        ExportUtils.postTrackExport(this, finishedTrackId);
+        stopSelf();
+    };
+
     // The following variables are set in onCreate:
     private RecordingStatus recordingStatus;
     private MutableLiveData<RecordingStatus> recordingStatusObservable;
@@ -93,6 +134,17 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
 
     private VoiceAnnouncementManager voiceAnnouncementManager;
     private TrackRecordingServiceNotificationManager notificationManager;
+    private WorkoutController workoutController;
+    private CuePlayer cuePlayer;
+    private RawSensorLogger rawSensorLogger;
+
+    private final Runnable countdownTick = this::onCountdownTick;
+    private MutableLiveData<String> startCountdownObservable;
+    private StartCountdown startCountdown;
+    private Long pendingWorkoutId;
+    private boolean countingDown;
+    private boolean countdownInForeground;
+    private PowerManager.WakeLock countdownWakeLock;
 
     @Override
     public void onCreate() {
@@ -102,6 +154,7 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         handler = new Handler(Looper.getMainLooper());
 
         recordingStatusObservable = new MutableLiveData<>();
+        startCountdownObservable = new MutableLiveData<>();
         updateRecordingStatus(STATUS_DEFAULT);
         gpsStatusObservable = new MutableLiveData<>(STATUS_GPS_DEFAULT);
         recordingDataObservable = new MutableLiveData<>(RecordingData.NOT_RECORDING);
@@ -111,6 +164,14 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
 
         voiceAnnouncementManager = new VoiceAnnouncementManager(this);
         notificationManager = new TrackRecordingServiceNotificationManager(this);
+        cuePlayer = new CuePlayer(this, handler, voiceAnnouncementManager);
+        workoutController = new WorkoutController(
+                cuePlayer,
+                WorkoutRepository.get(this),
+                trackPointCreator::getNow,
+                new WorkoutSessionStore(this),
+                voiceAnnouncementManager::isTtsReady);
+        rawSensorLogger = new RawSensorLogger();
 
         PreferencesUtils.registerOnSharedPreferenceChangeListener(this);
     }
@@ -118,11 +179,23 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
     @Override
     public void onDestroy() {
         Log.d(TAG, "Destroying");
+        countingDown = false;
+        countdownWakeLock = SystemUtils.releaseWakeLock(countdownWakeLock);
+        if (rawSensorLogger != null) {
+            rawSensorLogger.shutdown();
+            rawSensorLogger = null;
+        }
         if (trackPointCreator != null && trackPointCreator.isStarted()) {
             stopSensors();
         }
 
         PreferencesUtils.unregisterOnSharedPreferenceChangeListener(this);
+
+        if (cuePlayer != null) {
+            cuePlayer.release();
+            cuePlayer = null;
+        }
+        workoutController = null;
 
         trackPointCreator = null;
 
@@ -154,6 +227,9 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
             if (trackId != null) {
                 Log.i(TAG, "After restart: resuming recording for " + trackId);
                 resumeTrack(trackId);
+                if (workoutController != null) {
+                    workoutController.resumeIfPersisted(trackId);
+                }
             }
         }
         return START_STICKY;
@@ -162,6 +238,31 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
     @Override
     public Binder onBind(Intent intent) {
         return binder;
+    }
+
+    /**
+     * Finalizes a track that was left recording when the app was killed (e.g., force-close),
+     * so it is stored and exported like a normally stopped track.
+     *
+     * @return the recovered track or null.
+     */
+    public Track.Id recoverUnfinishedTrack() {
+        if (isRecording() || isStartCountdownRunning()) {
+            return null;
+        }
+        Track.Id trackId = TrackIdStorage.get(this);
+        if (trackId == null) {
+            return null;
+        }
+        Log.i(TAG, "Recovering unfinished track " + trackId);
+        TrackIdStorage.unset(this);
+        if (!trackRecordingManager.resumeExistingTrack(trackId)) {
+            return null;
+        }
+        trackRecordingManager.endCurrentTrack();
+        WorkoutSplitsExporter.export(this, trackId);
+        ExportUtils.postTrackExport(this, trackId);
+        return trackId;
     }
 
     public Track.Id startNewTrack() {
@@ -175,6 +276,183 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         Track.Id trackId = trackRecordingManager.startNewTrack();
         startRecording(trackId);
         return trackId;
+    }
+
+    public Track.Id startNewTrackWithWorkout(long workoutId) {
+        if (isRecording()) {
+            Log.w(TAG, "Ignore startNewTrackWithWorkout. Already recording.");
+            return null;
+        }
+        Workout workout = WorkoutRepository.get(this).getWorkout(workoutId);
+        if (workout == null) {
+            Log.w(TAG, "Workout not found: " + workoutId);
+            return null;
+        }
+        Track.Id trackId = startNewTrack();
+        if (trackId == null) {
+            return null;
+        }
+        workoutController.start(trackId, workout, trackPointCreator.getNow());
+        ContentProviderUtils utils = new ContentProviderUtils(this);
+        Track track = utils.getTrack(trackId);
+        if (track != null) {
+            TrackBuilder builder = new TrackBuilder(track);
+            builder.setName(workout.name());
+            builder.setActivityType(ActivityType.RUNNING);
+            builder.setActivityTypeLocalized(getString(ActivityType.RUNNING.getLocalizedStringId()));
+            utils.updateTrack(builder.getTrack());
+        }
+        return trackId;
+    }
+
+    /**
+     * Starts the pre-recording countdown, or tells the caller to start immediately.
+     * Nothing is recorded until the countdown reaches {@link StartCountdown#GO}.
+     *
+     * @param workoutId workout to start when the countdown ends, or null for a plain recording
+     */
+    public StartGate requestStart(@Nullable Long workoutId) {
+        if (isRecording() || countingDown) {
+            return StartGate.ALREADY_BUSY;
+        }
+        int seconds = PreferencesUtils.getStartCountdownSeconds();
+        if (seconds <= 0) {
+            return StartGate.START_IMMEDIATELY;
+        }
+        beginStartCountdown(workoutId, seconds);
+        return StartGate.COUNTDOWN_STARTED;
+    }
+
+    public boolean isStartCountdownRunning() {
+        return countingDown;
+    }
+
+    public LiveData<String> getStartCountdownObservable() {
+        return startCountdownObservable;
+    }
+
+    public void cancelStartCountdown() {
+        if (!countingDown) {
+            return;
+        }
+        Log.i(TAG, "Start countdown cancelled");
+        countingDown = false;
+        pendingWorkoutId = null;
+        startCountdown = null;
+        countdownInForeground = false;
+        if (handler != null) {
+            handler.removeCallbacks(countdownTick);
+        }
+        if (startCountdownObservable != null) {
+            startCountdownObservable.setValue(null);
+        }
+        countdownWakeLock = SystemUtils.releaseWakeLock(countdownWakeLock);
+        if (isRecording()) {
+            return;
+        }
+        if (voiceAnnouncementManager != null) {
+            voiceAnnouncementManager.stop();
+        }
+        boolean sensorsStarted = trackPointCreator != null && trackPointCreator.isStarted();
+        if (!sensorsStarted) {
+            stopForeground(true);
+            if (notificationManager != null) {
+                notificationManager.stop();
+            }
+            stopSelf();
+        } else if (notificationManager != null) {
+            notificationManager.onSensorsStarted(this);
+        }
+    }
+
+    private void beginStartCountdown(Long workoutId, int seconds) {
+        Log.i(TAG, "Start countdown for " + seconds + " seconds");
+        pendingWorkoutId = workoutId;
+        startCountdown = new StartCountdown(seconds);
+        countingDown = true;
+        countdownWakeLock = SystemUtils.acquireWakeLock(this, countdownWakeLock);
+        if (voiceAnnouncementManager != null) {
+            voiceAnnouncementManager.start(null);
+        }
+        publishStartCue(startCountdown.begin());
+        handler.postDelayed(countdownTick, 1000);
+    }
+
+    private void onCountdownTick() {
+        if (!countingDown || startCountdown == null || handler == null) {
+            return;
+        }
+        String cue = startCountdown.tick();
+        if (cue == null) {
+            return;
+        }
+        if (startCountdown.isFinished()) {
+            completeStartCountdown(cue);
+            return;
+        }
+        publishStartCue(cue);
+        handler.postDelayed(countdownTick, 1000);
+    }
+
+    private void completeStartCountdown(String goCue) {
+        countingDown = false;
+        Long workoutId = pendingWorkoutId;
+        pendingWorkoutId = null;
+        startCountdown = null;
+        if (startCountdownObservable != null) {
+            startCountdownObservable.setValue(goCue);
+        }
+        if (notificationManager != null) {
+            notificationManager.showCountdown(this, goCue, countdownInForeground);
+        }
+        speakStartCue(goCue);
+        Track.Id trackId = workoutId == null ? startNewTrack() : startNewTrackWithWorkout(workoutId);
+        countdownInForeground = false;
+        countdownWakeLock = SystemUtils.releaseWakeLock(countdownWakeLock);
+        if (trackId == null && !isRecording()) {
+            stopForeground(true);
+            if (notificationManager != null) {
+                notificationManager.stop();
+            }
+            stopSelf();
+        }
+    }
+
+    private void publishStartCue(String cue) {
+        if (startCountdownObservable != null) {
+            startCountdownObservable.setValue(cue);
+        }
+        if (notificationManager != null) {
+            Notification notification = notificationManager.showCountdown(this, cue, countdownInForeground);
+            if (!countdownInForeground) {
+                ServiceCompat.startForeground(this, TrackRecordingServiceNotificationManager.NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION + ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+                countdownInForeground = true;
+            }
+        }
+        speakStartCue(cue);
+    }
+
+    private void speakStartCue(String cue) {
+        if (cue == null) {
+            return;
+        }
+        // "Go" is spoken immediately so the workout's first cue cannot cancel it.
+        if (StartCountdown.GO.equals(cue)) {
+            if (voiceAnnouncementManager != null) {
+                voiceAnnouncementManager.announceWorkoutCue(cue);
+            }
+            return;
+        }
+        if (cuePlayer != null) {
+            cuePlayer.play(cue);
+        }
+    }
+
+    public LiveData<WorkoutState> getWorkoutStateObservable() {
+        if (workoutController == null) {
+            return new MutableLiveData<>(null);
+        }
+        return workoutController.getState();
     }
 
     public void resumeTrack(Track.Id trackId) {
@@ -192,6 +470,9 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         TrackIdStorage.set(this, trackId);
 
         startSensors();
+        if (rawSensorLogger != null) {
+            rawSensorLogger.start(this, trackId);
+        }
 
         voiceAnnouncementManager.start(trackRecordingManager.getTrackStatistics());
 
@@ -227,6 +508,11 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
             return;
         }
 
+        if (handler != null) {
+            handler.removeCallbacks(autoStopFinishedWorkout);
+        }
+        Track.Id finishedTrackId = recordingStatus.trackId();
+
         // Set recording status
         updateRecordingStatus(STATUS_DEFAULT);
 
@@ -234,6 +520,17 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         TrackIdStorage.unset(this);
 
         stopUpdateRecordingData();
+
+        if (workoutController != null && trackPointCreator != null) {
+            workoutController.stop(trackPointCreator.getNow());
+        }
+        if (rawSensorLogger != null) {
+            rawSensorLogger.stop();
+        }
+        WorkoutSplitsExporter.export(this, finishedTrackId);
+        if (notificationManager != null) {
+            notificationManager.setWorkoutStatus(null);
+        }
 
         voiceAnnouncementManager.stop();
 
@@ -328,7 +625,18 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         // Compute temporary track statistics using sensorData and update time.
         RecordingData data = trackRecordingManager.getDataForUI();
 
-        voiceAnnouncementManager.announceStatisticsIfNeeded(data);
+        if (workoutController != null && workoutController.isActive()) {
+            workoutController.onTick();
+            WorkoutState workoutState = workoutController.currentState();
+            if (notificationManager != null && workoutState != null) {
+                notificationManager.setWorkoutStatus(WorkoutBanner.format(this, workoutState));
+            }
+            if (workoutState != null && workoutState.finished()) {
+                scheduleWorkoutAutoStop();
+            }
+        } else {
+            voiceAnnouncementManager.announceStatisticsIfNeeded(data);
+        }
 
         recordingDataObservable.postValue(data);
     }
@@ -337,9 +645,24 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         voiceAnnouncementManager.announceIdle();
     }
 
+    /** Writes any buffered sensor samples. Safe to call when sensor logging is off. */
+    public void flushSensorLog() {
+        if (rawSensorLogger != null) {
+            rawSensorLogger.flush();
+        }
+    }
+
     @VisibleForTesting
     public void stopUpdateRecordingData() {
         handler.removeCallbacks(updateRecordingData);
+    }
+
+    private void scheduleWorkoutAutoStop() {
+        if (workoutAutoStopScheduled || handler == null || !PreferencesUtils.shouldWorkoutAutoStop()) {
+            return;
+        }
+        workoutAutoStopScheduled = true;
+        handler.postDelayed(autoStopFinishedWorkout, WORKOUT_AUTO_STOP_DELAY_MS);
     }
 
     public LiveData<RecordingStatus> getRecordingStatusObservable() {
@@ -364,5 +687,12 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         trackRecordingManager.onSharedPreferenceChanged(sharedPreferences, key);
         trackPointCreator.onSharedPreferenceChanged(sharedPreferences, key);
         notificationManager.onSharedPreferenceChanged(sharedPreferences, key);
+        if (rawSensorLogger != null && isRecording() && PreferencesUtils.isKey(R.string.record_sensor_data_key, key)) {
+            if (PreferencesUtils.shouldRecordSensorData()) {
+                rawSensorLogger.start(this, recordingStatus.trackId());
+            } else {
+                rawSensorLogger.pause();
+            }
+        }
     }
 }

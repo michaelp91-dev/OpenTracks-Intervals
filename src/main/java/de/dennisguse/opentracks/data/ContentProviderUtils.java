@@ -1,5 +1,6 @@
 /*
  * Copyright 2008 Google Inc.
+ * Modified by Michael Puckett, 2026
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -58,7 +59,9 @@ import de.dennisguse.opentracks.data.tables.MarkerColumns;
 import de.dennisguse.opentracks.data.tables.TrackPointsColumns;
 import de.dennisguse.opentracks.data.tables.TracksColumns;
 import de.dennisguse.opentracks.ui.markers.MarkerUtils;
+import de.dennisguse.opentracks.sensors.raw.SensorLogStore;
 import de.dennisguse.opentracks.util.FileUtils;
+import de.dennisguse.opentracks.workout.WorkoutRepository;
 
 /**
  * {@link ContentProviderUtils} implementation.
@@ -134,6 +137,8 @@ public class ContentProviderUtils {
     public void deleteAllTracks(Context context) {
         // Delete tracks last since it triggers a database vacuum call
         contentResolver.delete(CustomContentProvider.UrlType.TRACKS.getUri(), null, null);
+        WorkoutRepository.get(context).deleteAllTrackSegments();
+        SensorLogStore.deleteAll(context);
 
         File dir = FileUtils.getPhotoDir(context);
         FileUtils.deleteDirectoryRecurse(dir);
@@ -147,12 +152,16 @@ public class ContentProviderUtils {
 
         String whereClause = String.format(TracksColumns._ID + " IN (%s)", TextUtils.join(",", Collections.nCopies(trackIds.size(), "?")));
         contentResolver.delete(CustomContentProvider.UrlType.TRACKS.getUri(), whereClause, trackIds.stream().map(trackId -> Long.toString(trackId.id())).toArray(String[]::new));
+        WorkoutRepository.get(context).deleteForTracks(trackIds);
+        SensorLogStore.deleteForTracks(context, trackIds);
     }
 
     public void deleteTrack(Context context, @NonNull Track.Id trackId) {
         // Delete track folder resources.
         FileUtils.deleteDirectoryRecurse(FileUtils.getPhotoDir(context, trackId));
         contentResolver.delete(CustomContentProvider.UrlType.TRACKS.getUri(), TracksColumns._ID + "=?", new String[]{Long.toString(trackId.id())});
+        WorkoutRepository.get(context).deleteForTracks(List.of(trackId));
+        SensorLogStore.deleteForTracks(context, List.of(trackId));
     }
 
     //TODO Only use for tests; also move to tests.

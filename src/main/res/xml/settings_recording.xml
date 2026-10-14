@@ -4,6 +4,17 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:title="@string/settings_recording_title">
 
+    <SwitchPreferenceCompat
+        android:defaultValue="@bool/record_sensor_data_default"
+        android:key="@string/record_sensor_data_key"
+        android:summary="@string/record_sensor_data_summary"
+        android:title="@string/record_sensor_data_title" />
+
+    <EditTextPreference
+        android:defaultValue="@string/start_countdown_default"
+        android:key="@string/start_countdown_key"
+        android:title="@string/start_countdown_title" />
+
     <ListPreference
         android:defaultValue="@string/recording_distance_interval_default"
         android:entryValues="@array/recording_distance_interval_values"

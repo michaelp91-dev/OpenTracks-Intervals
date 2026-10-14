@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?><!--
 Copyright 2012 Google Inc.
+Modified by Michael Puckett, 2026
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,6 +16,11 @@ limitations under the License.
 -->
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/track_list_workouts"
+        android:icon="@drawable/ic_activity_workout_24dp"
+        android:title="@string/workout_menu"
+        app:showAsAction="ifRoom" />
     <item
         android:id="@+id/track_list_markers"
         android:icon="@drawable/ic_marker_show_24dp"

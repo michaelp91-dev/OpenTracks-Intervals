@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+Copyright 2026 Michael Puckett
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<resources>
+    <string name="workout_title" translatable="false">Workouts</string>
+    <string name="workout_menu" translatable="false">Workouts</string>
+    <string name="workout_tab" translatable="false">Workout</string>
+    <string name="workout_add" translatable="false">Add workout</string>
+    <string name="workout_new" translatable="false">New workout</string>
+    <string name="workout_edit" translatable="false">Edit</string>
+    <string name="workout_edit_title" translatable="false">Edit workout</string>
+    <string name="workout_delete" translatable="false">Delete</string>
+    <string name="workout_reset" translatable="false">Reset to original</string>
+    <string name="workout_save" translatable="false">Save</string>
+    <string name="workout_add_segment" translatable="false">Add segment</string>
+    <string name="workout_add_rounds" translatable="false">Add rounds</string>
+    <string name="workout_name_hint" translatable="false">Workout name</string>
+    <string name="workout_duration_hint" translatable="false">m:ss</string>
+    <string name="workout_segment_warmup" translatable="false">Warm-up walk</string>
+    <string name="workout_segment_run" translatable="false">Run</string>
+    <string name="workout_segment_walk" translatable="false">Walk</string>
+    <string name="workout_segment_cooldown" translatable="false">Cool-down walk</string>
+    <plurals name="workout_list_summary" translatable="false">
+        <item quantity="one">%1$d segment · %2$s</item>
+        <item quantity="other">%1$d segments · %2$s</item>
+    </plurals>
+    <string name="workout_list_empty" translatable="false">No workouts yet</string>
+    <string name="workout_item_actions" translatable="false">Workout actions</string>
+    <string name="workout_delete_confirm" translatable="false">Delete %1$s?</string>
+    <string name="workout_builtin_kept" translatable="false">Built-in workouts cannot be deleted. Reset restores the original plan.</string>
+    <string name="workout_already_recording" translatable="false">Already recording</string>
+    <string name="workout_missing" translatable="false">That workout is no longer available</string>
+    <string name="workout_need_name" translatable="false">Enter a name</string>
+    <string name="workout_need_segment" translatable="false">Add at least one segment</string>
+    <string name="workout_need_duration" translatable="false">Each segment needs a duration greater than 0</string>
+    <string name="workout_move_up" translatable="false">Move up</string>
+    <string name="workout_move_down" translatable="false">Move down</string>
+    <string name="workout_delete_segment" translatable="false">Delete segment</string>
+    <string name="workout_rounds_title" translatable="false">Add rounds</string>
+    <string name="workout_rounds_count" translatable="false">Rounds</string>
+    <string name="workout_rounds_run_seconds" translatable="false">Run seconds</string>
+    <string name="workout_rounds_walk_seconds" translatable="false">Walk seconds</string>
+    <string name="workout_rounds_invalid" translatable="false">Enter rounds, run seconds, and walk seconds, each greater than 0</string>
+    <string name="workout_cue_complete" translatable="false">Workout complete</string>
+    <string name="workout_banner_run" translatable="false">RUN %1$d/%2$d</string>
+    <string name="workout_banner_walk" translatable="false">WALK %1$d/%2$d</string>
+    <string name="workout_banner_status" translatable="false">%1$s · %2$s left · %3$s / %4$s</string>
+    <string name="workout_partial" translatable="false">(partial)</string>
+    <string name="workout_summary_runs" translatable="false">All runs</string>
+    <string name="workout_summary_walks" translatable="false">All walks</string>
+    <string name="workout_split_index" translatable="false">#</string>
+    <string name="workout_split_type" translatable="false">Type</string>
+    <string name="workout_split_time" translatable="false">Time</string>
+    <string name="workout_split_distance" translatable="false">km</string>
+    <string name="workout_split_speed" translatable="false">km/h</string>
+    <string name="workout_split_empty" translatable="false">No workout recorded for this track</string>
+    <string name="workout_cues_category" translatable="false">Workout cues</string>
+    <string name="workout_cue_beep_title" translatable="false">Beep before each cue</string>
+    <string name="workout_cue_vibrate_title" translatable="false">Vibrate before each cue</string>
+    <string name="workout_auto_stop_title" translatable="false">Stop recording when the workout finishes</string>
+    <string name="start_countdown_title" translatable="false">Start countdown</string>
+    <string name="start_countdown_summary" translatable="false">%1$d seconds before recording starts. 0 turns it off.</string>
+    <string name="record_sensor_data_title" translatable="false">Record sensor data</string>
+    <string name="record_sensor_data_summary" translatable="false">Save accelerometer, gyroscope, rotation, and step sensors with each recording</string>
+    <string name="sensor_export_title" translatable="false">Export sensor data</string>
+    <string name="sensor_export_missing" translatable="false">No sensor data for this track</string>
+</resources>

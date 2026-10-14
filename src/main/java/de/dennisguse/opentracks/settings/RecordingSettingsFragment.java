@@ -1,7 +1,12 @@
+/*
+ * Modified by Michael Puckett, 2026
+ */
 package de.dennisguse.opentracks.settings;
 
 import android.os.Bundle;
+import android.text.InputType;
 
+import androidx.preference.EditTextPreference;
 import androidx.preference.ListPreference;
 import androidx.preference.PreferenceFragmentCompat;
 
@@ -14,6 +19,10 @@ public class RecordingSettingsFragment extends PreferenceFragmentCompat {
     @Override
     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
         addPreferencesFromResource(R.xml.settings_recording);
+
+        EditTextPreference startCountdown = findPreference(getString(R.string.start_countdown_key));
+        startCountdown.setOnBindEditTextListener(editText -> editText.setInputType(InputType.TYPE_CLASS_NUMBER));
+        startCountdown.setSummaryProvider(preference -> getString(R.string.start_countdown_summary, PreferencesUtils.getStartCountdownSeconds()));
 
         UnitSystem unitSystem = PreferencesUtils.getUnitSystem();
 

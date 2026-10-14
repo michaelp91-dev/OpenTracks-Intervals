@@ -1,3 +1,6 @@
+/*
+ * Modified by Michael Puckett, 2026
+ */
 package de.dennisguse.opentracks.util;
 
 import android.Manifest;
@@ -88,6 +91,16 @@ public class PermissionRequester {
         }
     }
 
+    private static final List<String> ACTIVITY_RECOGNITION_PERMISSIONS;
+
+    static {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ACTIVITY_RECOGNITION_PERMISSIONS = List.of(Manifest.permission.ACTIVITY_RECOGNITION);
+        } else {
+            ACTIVITY_RECOGNITION_PERMISSIONS = Collections.emptyList();
+        }
+    }
+
     private static final List<String> ALL_PERMISSIONS;
     private static final List<String> RECORDING_PERMISSIONS;
 
@@ -98,6 +111,7 @@ public class PermissionRequester {
         RECORDING_PERMISSIONS = List.copyOf(recording);
 
         recording.addAll(NOTIFICATION_PERMISSIONS);
+        recording.addAll(ACTIVITY_RECOGNITION_PERMISSIONS);
 
         ALL_PERMISSIONS = Collections.unmodifiableList(recording);
     }
@@ -105,6 +119,7 @@ public class PermissionRequester {
     public final static PermissionRequester GPS = new PermissionRequester(GPS_PERMISSION);
     public final static PermissionRequester BLUETOOTH = new PermissionRequester(BLUETOOTH_PERMISSIONS);
     public final static PermissionRequester NOTIFICATION = new PermissionRequester(NOTIFICATION_PERMISSIONS);
+    public final static PermissionRequester ACTIVITY_RECOGNITION = new PermissionRequester(ACTIVITY_RECOGNITION_PERMISSIONS);
 
     public final static PermissionRequester ALL = new PermissionRequester(ALL_PERMISSIONS);
     public final static PermissionRequester RECORDING = new PermissionRequester(RECORDING_PERMISSIONS);

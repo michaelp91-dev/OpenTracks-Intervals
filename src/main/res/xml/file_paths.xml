@@ -3,4 +3,10 @@
     <external-files-path
         name="pictures"
         path="/" />
+    <files-path
+        name="sensors"
+        path="sensors/" />
+    <cache-path
+        name="sensor_exports"
+        path="sensors-export/" />
 </paths>

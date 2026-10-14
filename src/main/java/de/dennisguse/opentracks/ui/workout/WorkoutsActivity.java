@@ -1,0 +1,159 @@
+/*
+ * Copyright 2026 Michael Puckett
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+package de.dennisguse.opentracks.ui.workout;
+
+import android.content.Intent;
+import android.os.Bundle;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
+import androidx.recyclerview.widget.LinearLayoutManager;
+
+import de.dennisguse.opentracks.AbstractActivity;
+import de.dennisguse.opentracks.R;
+import de.dennisguse.opentracks.StartCountdownActivity;
+import de.dennisguse.opentracks.TrackRecordingActivity;
+import de.dennisguse.opentracks.data.models.Track;
+import de.dennisguse.opentracks.databinding.WorkoutsActivityBinding;
+import de.dennisguse.opentracks.services.MissingPermissionException;
+import de.dennisguse.opentracks.services.TrackRecordingServiceConnection;
+import de.dennisguse.opentracks.util.IntentUtils;
+import de.dennisguse.opentracks.util.PermissionRequester;
+import de.dennisguse.opentracks.workout.Workout;
+import de.dennisguse.opentracks.workout.WorkoutRepository;
+
+public class WorkoutsActivity extends AbstractActivity implements WorkoutListAdapter.Listener {
+
+    private WorkoutsActivityBinding viewBinding;
+    private WorkoutListAdapter adapter;
+    private WorkoutRepository repository;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        PermissionRequester.ACTIVITY_RECOGNITION.requestPermissionsIfNeeded(this, this, null, null);
+        repository = WorkoutRepository.get(this);
+        adapter = new WorkoutListAdapter(this);
+        viewBinding.workoutList.setLayoutManager(new LinearLayoutManager(this));
+        viewBinding.workoutList.setAdapter(adapter);
+        setSupportActionBar(viewBinding.workoutToolbar);
+        if (getSupportActionBar() != null) {
+            getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        reload();
+    }
+
+    @NonNull
+    @Override
+    protected View createRootView() {
+        viewBinding = WorkoutsActivityBinding.inflate(getLayoutInflater());
+        return viewBinding.getRoot();
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.workouts, menu);
+        return super.onCreateOptionsMenu(menu);
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        if (item.getItemId() == R.id.workout_add) {
+            startActivity(IntentUtils.newIntent(this, WorkoutEditActivity.class));
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
+    }
+
+    @Override
+    public void onStart(Workout workout) {
+        if (repository.getWorkout(workout.id()) == null) {
+            Toast.makeText(this, R.string.workout_missing, Toast.LENGTH_LONG).show();
+            reload();
+            return;
+        }
+        try {
+            TrackRecordingServiceConnection.executeForeground(this, (service, connection) -> {
+                switch (service.requestStart(workout.id())) {
+                    case COUNTDOWN_STARTED, ALREADY_BUSY -> {
+                        if (service.isStartCountdownRunning()) {
+                            startActivity(IntentUtils.newIntent(this, StartCountdownActivity.class));
+                            return;
+                        }
+                        Toast.makeText(this, R.string.workout_already_recording, Toast.LENGTH_LONG).show();
+                    }
+                    case START_IMMEDIATELY -> {
+                        Track.Id trackId = service.startNewTrackWithWorkout(workout.id());
+                        if (trackId == null) {
+                            Toast.makeText(this, R.string.workout_already_recording, Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        Intent intent = IntentUtils.newIntent(this, TrackRecordingActivity.class)
+                                .putExtra(TrackRecordingActivity.EXTRA_TRACK_ID, trackId);
+                        startActivity(intent);
+                    }
+                }
+            });
+        } catch (MissingPermissionException e) {
+            Toast.makeText(this, R.string.permission_recording_failed, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    public void onEdit(Workout workout) {
+        startActivity(IntentUtils.newIntent(this, WorkoutEditActivity.class)
+                .putExtra(WorkoutEditActivity.EXTRA_WORKOUT_ID, workout.id()));
+    }
+
+    @Override
+    public void onDelete(Workout workout) {
+        if (workout.builtin()) {
+            Toast.makeText(this, R.string.workout_builtin_kept, Toast.LENGTH_LONG).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setMessage(getString(R.string.workout_delete_confirm, workout.name()))
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    if (!repository.deleteWorkout(workout.id())) {
+                        Toast.makeText(this, R.string.workout_builtin_kept, Toast.LENGTH_LONG).show();
+                    }
+                    reload();
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    @Override
+    public void onReset(Workout workout) {
+        repository.resetPreset(workout.id());
+        reload();
+    }
+
+    private void reload() {
+        var workouts = repository.listWorkouts();
+        adapter.setWorkouts(workouts);
+        viewBinding.workoutEmpty.setVisibility(workouts.isEmpty() ? View.VISIBLE : View.GONE);
+    }
+}
