@@ -20,7 +20,6 @@ package de.dennisguse.opentracks;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
-import android.graphics.drawable.AnimatedVectorDrawable;
 import android.location.LocationManager;
 import android.os.Bundle;
 import android.provider.Settings;
@@ -32,13 +31,11 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.google.android.material.button.MaterialButton;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -54,6 +51,7 @@ import de.dennisguse.opentracks.services.MissingPermissionException;
 import de.dennisguse.opentracks.services.RecordingStatus;
 import de.dennisguse.opentracks.services.TrackRecordingService;
 import de.dennisguse.opentracks.services.TrackRecordingServiceConnection;
+import de.dennisguse.opentracks.intervals.WhoopHeartRateMonitor;
 import de.dennisguse.opentracks.settings.PreferencesUtils;
 import de.dennisguse.opentracks.settings.SettingsActivity;
 import de.dennisguse.opentracks.settings.UnitSystem;
@@ -144,6 +142,7 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
                 .observe(TrackListActivity.this, this::onGpsStatusChanged);
 
         updateGpsMenuItem(true, recordingStatus.isRecording());
+        autoStartGps();
     };
 
     @Override
@@ -156,18 +155,22 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
         recordingStatusConnection = new TrackRecordingServiceConnection(bindChangedCallback);
 
         viewBinding.aggregatedStatsButton.setOnClickListener((view) -> startActivity(IntentUtils.newIntent(this, AggregatedStatisticsActivity.class)));
-        viewBinding.sensorStartButton.setOnClickListener((view) -> {
-            LocationManager locationManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
-            if (locationManager != null && !locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS));
-            } else {
-                if (gpsStatusValue.isGpsStarted()) {
-                    recordingStatusConnection.stopService(this);
-                } else {
-                    startSensorsOrRecording((service, connection) -> service.tryStartSensors());
-                }
+        hrMonitor = new WhoopHeartRateMonitor(this);
+        hrMonitor.getState().observe(this, state -> updateHrLight());
+        hrMonitor.getHeartRate().observe(this, bpm -> updateHrLight());
+        viewBinding.statusLightGps.setOnClickListener(v -> onGpsLightTapped());
+        viewBinding.statusLightGps.setOnLongClickListener(v -> {
+            if (!recordingStatus.isRecording() && gpsStatusValue.isGpsStarted()) {
+                recordingStatusConnection.stopService(this);
+                gpsAutoStartAttempted = true;
+                Toast.makeText(this, "GPS stopped", Toast.LENGTH_SHORT).show();
+                return true;
             }
+            return false;
         });
+        viewBinding.statusLightHr.setOnClickListener(v -> onHrLightTapped());
+        updateGpsLight();
+        updateHrLight();
 
         LinearLayoutManager layoutManager = new LinearLayoutManager(this);
         adapter = new TrackListAdapter(this, viewBinding.trackList, recordingStatus, unitSystem);
@@ -227,7 +230,12 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
     }
 
     private void requestRequiredPermissions() {
-        PermissionRequester.ALL.requestPermissionsIfNeeded(this, this, null, (requester) -> {
+        PermissionRequester.ALL.requestPermissionsIfNeeded(this, this, () -> {
+            // Permissions just granted: kick off the GPS and WHOOP connections.
+            gpsAutoStartAttempted = false;
+            if (recordingStatusConnection != null) autoStartGps();
+            if (hrMonitor != null) hrMonitor.connect();
+        }, (requester) -> {
             // Activity recognition is only for the step sensors. Denying it must not block a recording.
             if (!PermissionRequester.RECORDING.hasPermission(this) || !PermissionRequester.NOTIFICATION.hasPermission(this)) {
                 Toast.makeText(this, R.string.permission_recording_failed, Toast.LENGTH_LONG).show();
@@ -241,6 +249,9 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
 
         PreferencesUtils.registerOnSharedPreferenceChangeListener(sharedPreferenceChangeListener);
         recordingStatusConnection.bind(this);
+        if (hrMonitor.getState().getValue() != WhoopHeartRateMonitor.State.GREEN) {
+            hrMonitor.connect();
+        }
     }
 
     @Override
@@ -269,10 +280,15 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
 
         PreferencesUtils.unregisterOnSharedPreferenceChangeListener(sharedPreferenceChangeListener);
         recordingStatusConnection.unbind(this);
+        hrMonitor.disconnect();
     }
 
     @Override
     protected void onDestroy() {
+        if (isFinishing() && !recordingStatus.isRecording() && recordingStatusConnection != null && gpsStatusValue.isGpsStarted()) {
+            // Leaving the app without recording: release GPS that was auto-started on open.
+            recordingStatusConnection.stopService(this);
+        }
         super.onDestroy();
         viewBinding = null;
         recordingStatusConnection = null;
@@ -375,13 +391,129 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
      */
     //TODO Check if if can be avoided to call this outside of onGpsStatusChanged()
     private void updateGpsMenuItem(boolean isGpsStarted, boolean isRecording) {
-        MaterialButton startGpsMenuItem = viewBinding.sensorStartButton;
-        startGpsMenuItem.setVisibility(!isRecording ? View.VISIBLE : View.INVISIBLE);
-        if (!isRecording) {
-            startGpsMenuItem.setIcon(AppCompatResources.getDrawable(this, isGpsStarted ? gpsStatusValue.icon : R.drawable.ic_gps_off_24dp));
-            if (startGpsMenuItem.getIcon() instanceof AnimatedVectorDrawable animatedVectorDrawable) {
-                animatedVectorDrawable.start();
+        updateGpsLight();
+    }
+
+    // --- Intervals: status lights (GPS + WHOOP heart rate) ---
+
+    private static final int COLOR_RED = 0xFFE53935;
+    private static final int COLOR_YELLOW = 0xFFFDD835;
+    private static final int COLOR_GREEN = 0xFF43A047;
+
+    private WhoopHeartRateMonitor hrMonitor;
+    private boolean gpsAutoStartAttempted = false;
+    private boolean gpsStartRequested = false;
+    private boolean showLiveHeartRate = false;
+
+    private boolean isGpsProviderEnabled() {
+        LocationManager locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        return locationManager == null || locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
+    }
+
+    private void autoStartGps() {
+        if (gpsAutoStartAttempted || recordingStatus.isRecording() || gpsStatusValue.isGpsStarted()) {
+            updateGpsLight();
+            return;
+        }
+        gpsAutoStartAttempted = true;
+        startGps();
+    }
+
+    private void startGps() {
+        if (!PermissionRequester.RECORDING.hasPermission(this) || !isGpsProviderEnabled()) {
+            gpsStartRequested = false;
+            updateGpsLight();
+            return;
+        }
+        gpsStartRequested = true;
+        updateGpsLight();
+        startSensorsOrRecording((service, connection) -> service.tryStartSensors());
+    }
+
+    private void onGpsLightTapped() {
+        int color = gpsColor();
+        if (color == COLOR_RED) {
+            if (!isGpsProviderEnabled()) {
+                startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS));
+                return;
             }
+            if (!PermissionRequester.RECORDING.hasPermission(this)) {
+                openAppPermissionSettings();
+                return;
+            }
+            Toast.makeText(this, "Retrying GPS…", Toast.LENGTH_SHORT).show();
+            startGps();
+        } else {
+            Toast.makeText(this, getString(gpsStatusValue.message), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private int gpsColor() {
+        if (!isGpsProviderEnabled() || !PermissionRequester.RECORDING.hasPermission(this)) {
+            return COLOR_RED;
+        }
+        switch (gpsStatusValue) {
+            case GPS_SIGNAL_FIX:
+                return COLOR_GREEN;
+            case GPS_ENABLED:
+            case GPS_SIGNAL_BAD:
+            case GPS_SIGNAL_LOST:
+                return COLOR_YELLOW;
+            case GPS_DISABLED:
+                return COLOR_RED;
+            case GPS_NONE:
+            default:
+                return gpsStartRequested ? COLOR_YELLOW : COLOR_RED;
+        }
+    }
+
+    private void tintLight(android.widget.TextView view, int color) {
+        android.graphics.drawable.Drawable[] d = view.getCompoundDrawablesRelative();
+        android.graphics.drawable.Drawable dot = d[2];
+        if (dot != null) {
+            dot = dot.mutate();
+            dot.setTint(color);
+            view.setCompoundDrawablesRelativeWithIntrinsicBounds(d[0], d[1], dot, d[3]);
+        }
+    }
+
+    private void openAppPermissionSettings() {
+        Toast.makeText(this, "Grant Location / Nearby devices permission", Toast.LENGTH_LONG).show();
+        startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", getPackageName(), null)));
+    }
+
+    private void updateGpsLight() {
+        if (viewBinding == null) return;
+        tintLight(viewBinding.statusLightGps, gpsColor());
+    }
+
+    private void onHrLightTapped() {
+        WhoopHeartRateMonitor.State state = hrMonitor.getState().getValue();
+        if (state == WhoopHeartRateMonitor.State.RED) {
+            if (!PermissionRequester.BLUETOOTH.hasPermission(this)) {
+                openAppPermissionSettings();
+                return;
+            }
+            Toast.makeText(this, "Retrying WHOOP… (" + hrMonitor.getDetail().getValue() + ")", Toast.LENGTH_LONG).show();
+            hrMonitor.connect();
+        } else if (state == WhoopHeartRateMonitor.State.GREEN) {
+            showLiveHeartRate = !showLiveHeartRate;
+            updateHrLight();
+        } else {
+            Toast.makeText(this, hrMonitor.getDetail().getValue(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void updateHrLight() {
+        if (viewBinding == null || hrMonitor == null) return;
+        WhoopHeartRateMonitor.State state = hrMonitor.getState().getValue();
+        Integer bpm = hrMonitor.getHeartRate().getValue();
+        int color = state == WhoopHeartRateMonitor.State.GREEN ? COLOR_GREEN : state == WhoopHeartRateMonitor.State.YELLOW ? COLOR_YELLOW : COLOR_RED;
+        tintLight(viewBinding.statusLightHr, color);
+        if (showLiveHeartRate && state == WhoopHeartRateMonitor.State.GREEN && bpm != null) {
+            viewBinding.statusLightHr.setText("\u2665 " + bpm + " bpm");
+        } else {
+            viewBinding.statusLightHr.setText("HR");
         }
     }
 
@@ -439,6 +571,9 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
 
     public void onGpsStatusChanged(GpsStatusValue newStatus) {
         gpsStatusValue = newStatus;
+        if (newStatus.isGpsStarted()) {
+            gpsStartRequested = false;
+        }
         updateGpsMenuItem(true, recordingStatus.isRecording());
     }
 
