@@ -64,6 +64,11 @@ public class WhoopHeartRateMonitor {
     private static final UUID WHOOP_SERVICE = UUID.fromString("61080001-8d6d-82b8-614a-1c8cb0f8dcc6");
     private static final UUID WHOOP_CMD_TO_STRAP = UUID.fromString("61080002-8d6d-82b8-614a-1c8cb0f8dcc6");
     private static final UUID WHOOP_CMD_FROM_STRAP = UUID.fromString("61080003-8d6d-82b8-614a-1c8cb0f8dcc6");
+    private static final UUID WHOOP_EVENTS_FROM_STRAP = UUID.fromString("61080004-8d6d-82b8-614a-1c8cb0f8dcc6");
+    private static final int WHOOP_PACKET_EVENT = 0x30;
+    static final int WHOOP_EVENT_DOUBLE_TAP = 14;
+    private static final long DOUBLE_TAP_DEBOUNCE_MS = 1000;
+    private static final long HR_FRESH_MS = 10_000;
     private static final UUID WHOOP_DATA_FROM_STRAP = UUID.fromString("61080005-8d6d-82b8-614a-1c8cb0f8dcc6");
     private static final int WHOOP_PACKET_COMMAND = 0x23;
     private static final int WHOOP_PACKET_REALTIME_DATA = 0x28;
@@ -127,6 +132,10 @@ public class WhoopHeartRateMonitor {
     private String step = "idle";
     private Runnable timeout;
     private Runnable pendingRetry;
+    private long lastTapMs = 0;
+    private long lastHrMs = 0;
+    private int lastBpm = 0;
+    private de.dennisguse.opentracks.services.announcement.TTSManager tts;
 
     private WhoopHeartRateMonitor(Context context) {
         this.context = context.getApplicationContext();
@@ -387,6 +396,12 @@ public class WhoopHeartRateMonitor {
                 PreferencesUtils.setString(R.string.settings_sensor_bluetooth_heart_rate_key, address);
             }
         }
+        lastBpm = bpm;
+        lastHrMs = android.os.SystemClock.elapsedRealtime();
+        if (tts == null) {
+            tts = new de.dennisguse.opentracks.services.announcement.TTSManager(context);
+            tts.start(); // init early so the first double tap speaks instead of beeping
+        }
         heartRate.postValue(bpm);
         setState(State.GREEN, "Connected to " + deviceName);
         String address = currentDevice != null ? currentDevice.getAddress() : null;
@@ -443,6 +458,8 @@ public class WhoopHeartRateMonitor {
                     BluetoothGattCharacteristic cmdOut = whoop.getCharacteristic(WHOOP_CMD_TO_STRAP);
                     if (cmdIn != null) enqueueNotify(g, cmdIn);
                     if (data != null) enqueueNotify(g, data);
+                    BluetoothGattCharacteristic events = whoop.getCharacteristic(WHOOP_EVENTS_FROM_STRAP);
+                    if (events != null) enqueueNotify(g, events);
                     if (cmdOut != null) {
                         // Handshake (Michael's working 10/14 Mac script hr_broadcast_on.py): battery query,
                         // TOGGLE_GENERIC_HR_PROFILE [01], TOGGLE_REALTIME_HR [01] (HR on DATA_FROM_STRAP meanwhile).
@@ -493,6 +510,14 @@ public class WhoopHeartRateMonitor {
             } else if (WHOOP_DATA_FROM_STRAP.equals(c.getUuid())) {
                 bpm = parseWhoopRealtimeHr(value);
             }
+            if (WHOOP_EVENTS_FROM_STRAP.equals(c.getUuid())) {
+                Integer eventId = parseWhoopEventId(value);
+                Log.i(TAG, "WHOOP event " + eventId);
+                if (eventId != null && eventId == WHOOP_EVENT_DOUBLE_TAP) {
+                    handler.post(() -> { if (g == gatt) onDoubleTap(); });
+                }
+                return;
+            }
             if (bpm == null || bpm <= 0) return;
             final int b = bpm;
             handler.post(() -> {
@@ -510,6 +535,28 @@ public class WhoopHeartRateMonitor {
             }
         }
     };
+
+    private void onDoubleTap() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastTapMs < DOUBLE_TAP_DEBOUNCE_MS) return;
+        lastTapMs = now;
+        if (tts == null) {
+            tts = new de.dennisguse.opentracks.services.announcement.TTSManager(context);
+            tts.start();
+        }
+        tts.speak(heartRateAnnouncement(lastHrMs > 0 ? lastBpm : null, now - lastHrMs));
+    }
+
+    static String heartRateAnnouncement(@Nullable Integer bpm, long ageMs) {
+        if (bpm == null || bpm <= 0 || ageMs > HR_FRESH_MS) return "heart rate unavailable";
+        return bpm + " beats per minute";
+    }
+
+    /** EVENT frame: AA len crc8 | 0x30 seq event_id(u16 LE) ... ; returns event id or null. */
+    static Integer parseWhoopEventId(byte[] v) {
+        if (v.length < 8 || (v[0] & 0xFF) != 0xAA || (v[4] & 0xFF) != WHOOP_PACKET_EVENT) return null;
+        return (v[6] & 0xFF) | ((v[7] & 0xFF) << 8);
+    }
 
     @SuppressLint("MissingPermission")
     private void reconnectAfterHandshake() {

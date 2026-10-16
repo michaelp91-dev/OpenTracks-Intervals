@@ -46,4 +46,15 @@ public class WhoopHeartRateMonitorTest {
         org.junit.Assert.assertFalse(WhoopHeartRateMonitor.isWhoopName("Polar H10"));
         org.junit.Assert.assertFalse(WhoopHeartRateMonitor.isWhoopName(null));
     }
+
+    @org.junit.Test
+    public void doubleTapEventAndAnnouncement() {
+        byte[] tap = WhoopHeartRateMonitor.whoopFrame(bytes("30050e0001020304"));
+        assertEquals(Integer.valueOf(14), WhoopHeartRateMonitor.parseWhoopEventId(tap));
+        assertEquals(Integer.valueOf(9), WhoopHeartRateMonitor.parseWhoopEventId(WhoopHeartRateMonitor.whoopFrame(bytes("30060900"))));
+        org.junit.Assert.assertNull(WhoopHeartRateMonitor.parseWhoopEventId(WhoopHeartRateMonitor.whoopFrame(bytes("23010301"))));
+        assertEquals("142 beats per minute", WhoopHeartRateMonitor.heartRateAnnouncement(142, 2000));
+        assertEquals("heart rate unavailable", WhoopHeartRateMonitor.heartRateAnnouncement(142, 30000));
+        assertEquals("heart rate unavailable", WhoopHeartRateMonitor.heartRateAnnouncement(null, 0));
+    }
 }

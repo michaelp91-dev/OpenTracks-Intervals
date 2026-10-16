@@ -94,7 +94,7 @@ public class TTSManager {
 
     private MediaPlayer ttsFallback;
 
-    TTSManager(Context context) {
+    public TTSManager(Context context) {
         this.context = context;
         audioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
     }
