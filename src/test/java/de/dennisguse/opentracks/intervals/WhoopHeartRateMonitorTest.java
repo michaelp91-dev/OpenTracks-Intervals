@@ -36,4 +36,14 @@ public class WhoopHeartRateMonitorTest {
         assertEquals(Integer.valueOf(0x42), WhoopHeartRateMonitor.parseWhoopRealtimeHr(WhoopHeartRateMonitor.whoopFrame(bytes("2802ad896566f065420000000000000000000000"))));
         assertEquals(Integer.valueOf(72), WhoopHeartRateMonitor.parseStandardHr(bytes("0048")));
     }
+
+    @org.junit.Test
+    public void backoffAndNames() {
+        assertEquals(1000L, WhoopHeartRateMonitor.backoffMs(1));
+        assertEquals(2000L, WhoopHeartRateMonitor.backoffMs(2));
+        assertEquals(4000L, WhoopHeartRateMonitor.backoffMs(3));
+        org.junit.Assert.assertTrue(WhoopHeartRateMonitor.isWhoopName("WHOOP 4A0788542"));
+        org.junit.Assert.assertFalse(WhoopHeartRateMonitor.isWhoopName("Polar H10"));
+        org.junit.Assert.assertFalse(WhoopHeartRateMonitor.isWhoopName(null));
+    }
 }

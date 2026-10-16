@@ -15,9 +15,11 @@ import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelUuid;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -25,26 +27,35 @@ import androidx.annotation.Nullable;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 import de.dennisguse.opentracks.R;
-import de.dennisguse.opentracks.sensors.driver.SensorType;
 import de.dennisguse.opentracks.settings.PreferencesUtils;
 import de.dennisguse.opentracks.util.PermissionRequester;
 
 /**
- * Lightweight BLE heart-rate client used by the start screen status light.
- * Connects to the heart-rate sensor configured in the sensor settings; if none is configured,
- * scans for the first device whose name starts with "WHOOP" and saves it as the heart-rate sensor
- * (so recordings pick it up too). Reads standard HR (0x2A37). For a WHOOP 4.0 it also sends the
- * WHOOP "broadcast HR on" command (cmd 0x0e, data 01) on the custom service, which turns on the
- * standard HR service without the WHOOP app/subscription, and parses realtime HR frames from
- * DATA_FROM_STRAP as a fallback.
+ * Single owner of the BLE connection to a WHOOP 4.0 (or any standard HR strap).
+ *
+ * Status 133 fixes (10/16): this is a process-wide singleton and the ONLY GATT client for the
+ * strap; OpenTracks' recording HR sensor reads from it through {@link WhoopHeartRateDriver}
+ * instead of opening a second (TRANSPORT_AUTO) GATT connection to the same address.
+ * Each attempt gets a fresh BluetoothDevice: a bonded WHOOP from getBondedDevices() is preferred
+ * (it carries the right address type), otherwise / alternately a fresh LE scan is used (scan is
+ * stopped and we wait before connecting). Always TRANSPORT_LE, autoConnect=false, the old gatt is
+ * closed before each retry, retries back off 1/2/4 s, and failures report attempt + step.
+ * Bonds are never removed.
  */
 public class WhoopHeartRateMonitor {
 
     public enum State {RED, YELLOW, GREEN}
+
+    public interface HeartRateListener {
+        void onHeartRate(int bpm, String deviceName, String address);
+    }
 
     private static final String TAG = WhoopHeartRateMonitor.class.getSimpleName();
     private static final UUID HR_SERVICE = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb");
@@ -60,15 +71,45 @@ public class WhoopHeartRateMonitor {
     private static final int WHOOP_CMD_TOGGLE_REALTIME_HR = 0x03;  // 1 Hz HR in 0x28 frames on DATA_FROM_STRAP
     private static final int WHOOP_CMD_GET_BATTERY = 0x1a;
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
-    private static final long SCAN_TIMEOUT_MS = 20_000;
-    private static final long CONNECT_TIMEOUT_MS = 25_000;
+    private static final long SCAN_TIMEOUT_MS = 15_000;
+    private static final long CONNECT_TIMEOUT_MS = 20_000;
     private static final long DATA_TIMEOUT_MS = 15_000;
+    private static final long POST_SCAN_DELAY_MS = 600;
+    static final int MAX_ATTEMPTS = 4;
+    private static final String PREFS = "whoop_monitor";
+    private static final String KEY_ADDRESS = "address";
+
+    private static WhoopHeartRateMonitor instance;
+
+    public static synchronized WhoopHeartRateMonitor get(Context context) {
+        if (instance == null) instance = new WhoopHeartRateMonitor(context);
+        return instance;
+    }
+
+    /** True if this address is the strap this monitor owns (so nobody else may open a GATT to it). */
+    public static boolean isManagedAddress(Context context, String address) {
+        if (address == null) return false;
+        String saved = context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_ADDRESS, null);
+        return address.equalsIgnoreCase(saved);
+    }
+
+    static boolean isWhoopName(@Nullable String name) {
+        return name != null && name.toUpperCase(Locale.US).startsWith("WHOOP");
+    }
+
+    /** Backoff before attempt n+1 after attempt n failed: 1 s, 2 s, 4 s ... */
+    static long backoffMs(int failedAttempt) {
+        return 1000L << Math.max(0, Math.min(failedAttempt - 1, 4));
+    }
 
     private final Context context;
+    private final SharedPreferences prefs;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final MutableLiveData<State> state = new MutableLiveData<>(State.RED);
     private final MutableLiveData<Integer> heartRate = new MutableLiveData<>(null);
     private final MutableLiveData<String> detail = new MutableLiveData<>("Not connected");
+    private final Set<Object> holders = new HashSet<>();
+    private final CopyOnWriteArraySet<HeartRateListener> listeners = new CopyOnWriteArraySet<>();
 
     private BluetoothGatt gatt;
     private final java.util.ArrayDeque<Runnable> gattQueue = new java.util.ArrayDeque<>();
@@ -80,65 +121,137 @@ public class WhoopHeartRateMonitor {
     private ScanCallback scanCallback;
     private String deviceName;
 
-    private final Runnable failTimeout = () -> fail("Timed out connecting");
-    private final Runnable dataTimeout = () -> {
-        heartRate.postValue(null);
-        fail("No heart rate data from strap");
-    };
+    private boolean inProgress = false;
+    private boolean connected = false;
+    private int attempt = 0;
+    private String step = "idle";
+    private Runnable timeout;
+    private Runnable pendingRetry;
 
-    public WhoopHeartRateMonitor(Context context) {
+    private WhoopHeartRateMonitor(Context context) {
         this.context = context.getApplicationContext();
+        this.prefs = this.context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        // Migration: earlier builds saved the WHOOP straight into the OpenTracks HR sensor setting.
+        if (prefs.getString(KEY_ADDRESS, null) == null) {
+            try {
+                String hr = PreferencesUtils.getString(R.string.settings_sensor_bluetooth_heart_rate_key, null);
+                if (hr != null && BluetoothAdapter.checkBluetoothAddress(hr)) prefs.edit().putString(KEY_ADDRESS, hr).apply();
+            } catch (Exception e) {
+                Log.w(TAG, "migrate", e);
+            }
+        }
     }
 
-    public LiveData<State> getState() {
-        return state;
+    public LiveData<State> getState() { return state; }
+    public LiveData<Integer> getHeartRate() { return heartRate; }
+    public LiveData<String> getDetail() { return detail; }
+
+    @Nullable
+    public String getDeviceName() { return deviceName; }
+
+    public void addListener(HeartRateListener l) { listeners.add(l); }
+    public void removeListener(HeartRateListener l) { listeners.remove(l); }
+
+    /** Someone (start screen, recording) wants HR. Connects if not already connected/connecting. */
+    public void acquire(Object holder) {
+        handler.post(() -> {
+            holders.add(holder);
+            if (!connected && !inProgress) start();
+        });
     }
 
-    public LiveData<Integer> getHeartRate() {
-        return heartRate;
+    /** Drops a holder; disconnects when nobody needs HR any more. */
+    public void release(Object holder) {
+        handler.post(() -> {
+            holders.remove(holder);
+            if (holders.isEmpty()) disconnect();
+        });
     }
 
-    public LiveData<String> getDetail() {
-        return detail;
+    /** Explicit (re)try, e.g. tapping the red light. */
+    public void connect() {
+        handler.post(this::start);
+    }
+
+    public void disconnect() {
+        handler.post(() -> {
+            inProgress = false;
+            connected = false;
+            closeInternal();
+            heartRate.postValue(null);
+            setState(State.RED, "Not connected");
+        });
+    }
+
+    private void start() {
+        closeInternal();
+        connected = false;
+        inProgress = true;
+        attempt = 0;
+        handshakeReconnectDone = false;
+        attemptOnce();
     }
 
     @Nullable
-    public String getDeviceName() {
-        return deviceName;
+    private BluetoothAdapter adapter() {
+        BluetoothManager manager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
+        return manager != null ? manager.getAdapter() : null;
+    }
+
+    /** Bonded WHOOP*, preferring the address we connected to before. */
+    @SuppressLint("MissingPermission")
+    @Nullable
+    private BluetoothDevice bondedWhoop(BluetoothAdapter adapter) {
+        Set<BluetoothDevice> bonded;
+        try {
+            bonded = adapter.getBondedDevices();
+        } catch (SecurityException e) {
+            return null;
+        }
+        if (bonded == null) return null;
+        String saved = prefs.getString(KEY_ADDRESS, null);
+        BluetoothDevice found = null;
+        for (BluetoothDevice d : bonded) {
+            if (!isWhoopName(d.getName())) continue;
+            if (d.getAddress().equalsIgnoreCase(saved)) return d;
+            if (found == null) found = d;
+        }
+        return found;
     }
 
     @SuppressLint("MissingPermission")
-    public void connect() {
-        disconnect();
+    private void attemptOnce() {
+        if (!inProgress) return;
+        pendingRetry = null;
+        attempt++;
         handshakeReconnectDone = false;
         if (!PermissionRequester.BLUETOOTH.hasPermission(context)) {
-            fail("Bluetooth permission missing");
+            failFinal("Bluetooth permission missing");
             return;
         }
-        BluetoothManager manager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
-        BluetoothAdapter adapter = manager != null ? manager.getAdapter() : null;
+        BluetoothAdapter adapter = adapter();
         if (adapter == null || !adapter.isEnabled()) {
-            fail("Bluetooth is off");
-            return;
-        }
-        setState(State.YELLOW, "Connecting…");
-        handler.postDelayed(failTimeout, CONNECT_TIMEOUT_MS);
-
-        String address = PreferencesUtils.getString(R.string.settings_sensor_bluetooth_heart_rate_key, SensorType.NONE.getPreferenceValue());
-        if (address != null && BluetoothAdapter.checkBluetoothAddress(address)) {
-            connectGatt(adapter.getRemoteDevice(address));
+            failFinal("Bluetooth is off");
             return;
         }
 
-        // No sensor configured: scan for the first WHOOP.
+        // Odd attempts: bonded strap directly (paired in Android settings). Even attempts, or no bond: fresh scan.
+        BluetoothDevice bonded = bondedWhoop(adapter);
+        if (bonded != null && (attempt % 2 == 1)) {
+            Log.i(TAG, "Attempt " + attempt + ": bonded " + bonded.getName() + " " + bonded.getAddress());
+            connectGatt(bonded);
+            return;
+        }
+
         scanner = adapter.getBluetoothLeScanner();
         if (scanner == null) {
-            fail("BLE scanner unavailable");
+            attemptFailed("BLE scanner unavailable");
             return;
         }
-        setState(State.YELLOW, "Searching for WHOOP…");
-        handler.removeCallbacks(failTimeout);
-        handler.postDelayed(failTimeout, SCAN_TIMEOUT_MS);
+        step = "scan";
+        setState(State.YELLOW, "Searching for WHOOP" + attemptLabel() + "…");
+        armTimeout(SCAN_TIMEOUT_MS, "WHOOP not found (is it charged and on your wrist?)");
+        String saved = prefs.getString(KEY_ADDRESS, null);
         scanCallback = new ScanCallback() {
             @Override
             public void onScanResult(int callbackType, ScanResult result) {
@@ -146,24 +259,48 @@ public class WhoopHeartRateMonitor {
                 String name = result.getScanRecord() != null ? result.getScanRecord().getDeviceName() : null;
                 if (name == null) name = device.getName();
                 boolean whoopService = result.getScanRecord() != null && result.getScanRecord().getServiceUuids() != null
-                        && result.getScanRecord().getServiceUuids().contains(new android.os.ParcelUuid(WHOOP_SERVICE));
-                if ((name != null && name.toUpperCase(Locale.US).startsWith("WHOOP")) || whoopService) {
-                    Log.i(TAG, "Found " + name + " " + device.getAddress());
-                    stopScan();
-                    PreferencesUtils.setString(R.string.settings_sensor_bluetooth_heart_rate_key, device.getAddress());
-                    handler.removeCallbacks(failTimeout);
-                    handler.postDelayed(failTimeout, CONNECT_TIMEOUT_MS);
-                    handler.post(() -> connectGatt(device));
+                        && result.getScanRecord().getServiceUuids().contains(new ParcelUuid(WHOOP_SERVICE));
+                boolean savedMatch = saved != null && saved.equalsIgnoreCase(device.getAddress());
+                if (isWhoopName(name) || whoopService || savedMatch) {
+                    handler.post(() -> {
+                        if (scanCallback != this) return;
+                        Log.i(TAG, "Found " + device.getAddress());
+                        stopScan();
+                        cancelTimeout();
+                        step = "wait after scan";
+                        handler.postDelayed(() -> {
+                            if (inProgress && gatt == null) connectGatt(device);
+                        }, POST_SCAN_DELAY_MS);
+                    });
                 }
             }
 
             @Override
             public void onScanFailed(int errorCode) {
-                fail("Scan failed (" + errorCode + ")");
+                handler.post(() -> attemptFailed("scan error " + errorCode));
             }
         };
         ScanSettings settings = new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build();
-        scanner.startScan(null, settings, scanCallback);
+        try {
+            scanner.startScan(null, settings, scanCallback);
+        } catch (Exception e) {
+            attemptFailed("scan error " + e.getMessage());
+        }
+    }
+
+    private String attemptLabel() {
+        return " (attempt " + attempt + "/" + MAX_ATTEMPTS + ")";
+    }
+
+    private void armTimeout(long ms, String why) {
+        cancelTimeout();
+        timeout = () -> attemptFailed(why);
+        handler.postDelayed(timeout, ms);
+    }
+
+    private void cancelTimeout() {
+        if (timeout != null) handler.removeCallbacks(timeout);
+        timeout = null;
     }
 
     @SuppressLint("MissingPermission")
@@ -181,80 +318,175 @@ public class WhoopHeartRateMonitor {
 
     @SuppressLint("MissingPermission")
     private void connectGatt(BluetoothDevice device) {
+        closeGatt();
         currentDevice = device;
-        deviceName = device.getName() != null ? device.getName() : device.getAddress();
-        setState(State.YELLOW, "Connecting to " + deviceName + "…");
+        String n = null;
+        try { n = device.getName(); } catch (SecurityException ignored) { }
+        deviceName = n != null ? n : device.getAddress();
+        step = "connect";
+        setState(State.YELLOW, "Connecting to " + deviceName + attemptLabel() + "…");
+        armTimeout(CONNECT_TIMEOUT_MS, "connect timed out");
         gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
+        if (gatt == null) attemptFailed("connectGatt returned null");
     }
+
+    private void attemptFailed(String why) {
+        if (!inProgress) return;
+        String msg = "Attempt " + attempt + "/" + MAX_ATTEMPTS + " failed at " + step + ": " + why;
+        Log.w(TAG, msg);
+        closeInternal();
+        heartRate.postValue(null);
+        if (attempt < MAX_ATTEMPTS) {
+            long wait = backoffMs(attempt);
+            setState(State.YELLOW, msg + " – retrying in " + (wait / 1000) + " s");
+            pendingRetry = this::attemptOnce;
+            handler.postDelayed(pendingRetry, wait);
+        } else {
+            failFinal(msg);
+        }
+    }
+
+    private void failFinal(String msg) {
+        Log.w(TAG, msg);
+        inProgress = false;
+        connected = false;
+        closeInternal();
+        heartRate.postValue(null);
+        setState(State.RED, msg);
+    }
+
+    private void onLostAfterConnected(String why) {
+        Log.w(TAG, "Lost connection: " + why);
+        connected = false;
+        closeInternal();
+        heartRate.postValue(null);
+        if (holders.isEmpty()) {
+            setState(State.RED, "Disconnected: " + why);
+            return;
+        }
+        // Reconnect with a fresh set of attempts.
+        inProgress = true;
+        attempt = 0;
+        setState(State.YELLOW, "Reconnecting (" + why + ")…");
+        pendingRetry = this::attemptOnce;
+        handler.postDelayed(pendingRetry, 1000);
+    }
+
+    private void onHeartRateValue(int bpm) {
+        cancelTimeout();
+        handler.removeCallbacks(dataTimeout);
+        handler.postDelayed(dataTimeout, DATA_TIMEOUT_MS);
+        if (!connected) {
+            connected = true;
+            inProgress = false;
+            step = "streaming";
+            if (currentDevice != null) {
+                String address = currentDevice.getAddress();
+                prefs.edit().putString(KEY_ADDRESS, address).apply();
+                // Recording HR sensor = this strap; HeartRateHandler routes it through this monitor.
+                PreferencesUtils.setString(R.string.settings_sensor_bluetooth_heart_rate_key, address);
+            }
+        }
+        heartRate.postValue(bpm);
+        setState(State.GREEN, "Connected to " + deviceName);
+        String address = currentDevice != null ? currentDevice.getAddress() : null;
+        for (HeartRateListener l : listeners) l.onHeartRate(bpm, deviceName, address);
+    }
+
+    private final Runnable dataTimeout = () -> {
+        if (connected) onLostAfterConnected("no heart rate data for 15 s");
+        else attemptFailed("no heart rate data");
+    };
 
     private final BluetoothGattCallback callback = new BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         @Override
         public void onConnectionStateChange(BluetoothGatt g, int status, int newState) {
-            if (g != gatt) return;
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                setState(State.YELLOW, "Discovering services…");
-                g.discoverServices();
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                heartRate.postValue(null);
-                fail("Disconnected (status " + status + ")");
-            }
+            handler.post(() -> {
+                if (g != gatt) return;
+                if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                    step = "discover services";
+                    setState(State.YELLOW, "Discovering services" + attemptLabel() + "…");
+                    // Short pause helps bonded links finish encryption before discovery.
+                    handler.postDelayed(() -> {
+                        if (g == gatt && !g.discoverServices()) attemptFailed("discoverServices refused");
+                    }, 400);
+                } else {
+                    String why = "disconnected (status " + status + ")";
+                    if (connected) onLostAfterConnected(why);
+                    else attemptFailed(why);
+                }
+            });
         }
 
         @SuppressLint("MissingPermission")
         @Override
         public void onServicesDiscovered(BluetoothGatt g, int status) {
-            if (g != gatt) return;
-            BluetoothGattService hrService = g.getService(HR_SERVICE);
-            BluetoothGattCharacteristic hr = hrService != null ? hrService.getCharacteristic(HR_MEASUREMENT) : null;
-            BluetoothGattService whoop = g.getService(WHOOP_SERVICE);
-            if (hr == null && whoop == null) {
-                fail("Device has no heart rate or WHOOP service");
-                return;
-            }
-            if (hr != null) enqueueNotify(g, hr);
-            if (whoop != null) {
-                BluetoothGattCharacteristic cmdIn = whoop.getCharacteristic(WHOOP_CMD_FROM_STRAP);
-                BluetoothGattCharacteristic data = whoop.getCharacteristic(WHOOP_DATA_FROM_STRAP);
-                BluetoothGattCharacteristic cmdOut = whoop.getCharacteristic(WHOOP_CMD_TO_STRAP);
-                if (cmdIn != null) enqueueNotify(g, cmdIn);
-                if (data != null) enqueueNotify(g, data);
-                if (cmdOut != null && hr == null) {
-                    // Handshake (same as Michael's working 10/14 Mac script hr_broadcast_on.py):
-                    // battery query, then TOGGLE_GENERIC_HR_PROFILE [01] -> strap exposes standard 0x180D.
-                    // Also TOGGLE_REALTIME_HR [01] so HR flows on DATA_FROM_STRAP meanwhile.
-                    enqueueWrite(g, cmdOut, whoopCommand(WHOOP_CMD_GET_BATTERY, new byte[0]));
-                    enqueueWrite(g, cmdOut, whoopCommand(WHOOP_CMD_TOGGLE_HR_BROADCAST, new byte[]{0x01}));
-                    enqueueWrite(g, cmdOut, whoopCommand(WHOOP_CMD_TOGGLE_REALTIME_HR, new byte[]{0x01}));
-                    if (!handshakeReconnectDone) {
-                        // The 0x180D service only shows up after a reconnect (as in the Mac script).
-                        handshakeReconnectDone = true;
-                        handler.postDelayed(WhoopHeartRateMonitor.this::reconnectAfterHandshake, 4000);
+            handler.post(() -> {
+                if (g != gatt) return;
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    attemptFailed("service discovery status " + status);
+                    return;
+                }
+                BluetoothGattService hrService = g.getService(HR_SERVICE);
+                BluetoothGattCharacteristic hr = hrService != null ? hrService.getCharacteristic(HR_MEASUREMENT) : null;
+                BluetoothGattService whoop = g.getService(WHOOP_SERVICE);
+                if (hr == null && whoop == null) {
+                    failFinal("Device has no heart rate or WHOOP service");
+                    return;
+                }
+                step = "subscribe";
+                if (hr != null) enqueueNotify(g, hr);
+                if (whoop != null) {
+                    BluetoothGattCharacteristic cmdIn = whoop.getCharacteristic(WHOOP_CMD_FROM_STRAP);
+                    BluetoothGattCharacteristic data = whoop.getCharacteristic(WHOOP_DATA_FROM_STRAP);
+                    BluetoothGattCharacteristic cmdOut = whoop.getCharacteristic(WHOOP_CMD_TO_STRAP);
+                    if (cmdIn != null) enqueueNotify(g, cmdIn);
+                    if (data != null) enqueueNotify(g, data);
+                    if (cmdOut != null) {
+                        // Handshake (Michael's working 10/14 Mac script hr_broadcast_on.py): battery query,
+                        // TOGGLE_GENERIC_HR_PROFILE [01], TOGGLE_REALTIME_HR [01] (HR on DATA_FROM_STRAP meanwhile).
+                        step = "handshake";
+                        enqueueWrite(g, cmdOut, whoopCommand(WHOOP_CMD_GET_BATTERY, new byte[0]));
+                        enqueueWrite(g, cmdOut, whoopCommand(WHOOP_CMD_TOGGLE_HR_BROADCAST, new byte[]{0x01}));
+                        enqueueWrite(g, cmdOut, whoopCommand(WHOOP_CMD_TOGGLE_REALTIME_HR, new byte[]{0x01}));
+                        if (hr == null && !handshakeReconnectDone) {
+                            // 0x180D only shows up after a reconnect (as in the Mac script); realtime HR
+                            // keeps flowing meanwhile, so only reconnect if no HR arrives at all.
+                            handshakeReconnectDone = true;
+                            handler.postDelayed(() -> {
+                                if (g == gatt && !connected) reconnectAfterHandshake();
+                            }, 6000);
+                        }
                     }
                 }
-            }
-            setState(State.YELLOW, "Waiting for heart rate…");
-            handler.removeCallbacks(dataTimeout);
-            handler.postDelayed(dataTimeout, DATA_TIMEOUT_MS);
-            nextOp();
+                setState(State.YELLOW, "Waiting for heart rate" + attemptLabel() + "…");
+                cancelTimeout();
+                handler.removeCallbacks(dataTimeout);
+                handler.postDelayed(dataTimeout, DATA_TIMEOUT_MS);
+                nextOp();
+            });
         }
 
         @Override
         public void onDescriptorWrite(BluetoothGatt g, BluetoothGattDescriptor d, int status) {
-            if (g != gatt) return;
-            opDone();
+            handler.post(() -> {
+                if (g != gatt) return;
+                opDone();
+            });
         }
 
         @Override
         public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int status) {
-            if (g != gatt) return;
-            Log.i(TAG, "write " + c.getUuid() + " status " + status);
-            opDone();
+            handler.post(() -> {
+                if (g != gatt) return;
+                Log.i(TAG, "write " + c.getUuid() + " status " + status);
+                opDone();
+            });
         }
 
         @Override
         public void onCharacteristicChanged(@NonNull BluetoothGatt g, @NonNull BluetoothGattCharacteristic c, @NonNull byte[] value) {
-            if (g != gatt) return;
             Integer bpm = null;
             if (HR_MEASUREMENT.equals(c.getUuid())) {
                 bpm = parseStandardHr(value);
@@ -262,11 +494,11 @@ public class WhoopHeartRateMonitor {
                 bpm = parseWhoopRealtimeHr(value);
             }
             if (bpm == null || bpm <= 0) return;
-            handler.removeCallbacks(failTimeout);
-            handler.removeCallbacks(dataTimeout);
-            handler.postDelayed(dataTimeout, DATA_TIMEOUT_MS);
-            heartRate.postValue(bpm);
-            setState(State.GREEN, "Connected to " + deviceName);
+            final int b = bpm;
+            handler.post(() -> {
+                if (g != gatt) return;
+                onHeartRateValue(b);
+            });
         }
 
         @SuppressWarnings("deprecation")
@@ -274,7 +506,7 @@ public class WhoopHeartRateMonitor {
         public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                 byte[] v = c.getValue();
-                if (v != null) onCharacteristicChanged(g, c, v);
+                if (v != null) onCharacteristicChanged(g, c, v.clone());
             }
         }
     };
@@ -284,19 +516,13 @@ public class WhoopHeartRateMonitor {
         if (gatt == null || currentDevice == null) return;
         Log.i(TAG, "Reconnecting after WHOOP handshake to pick up 0x180D");
         BluetoothDevice device = currentDevice;
-        BluetoothGatt old = gatt;
-        gatt = null;
-        gattQueue.clear();
-        gattBusy = false;
-        try {
-            old.disconnect();
-            old.close();
-        } catch (Exception e) {
-            Log.w(TAG, "close", e);
-        }
-        handler.postDelayed(() -> connectGatt(device), 1500);
+        closeGatt();
+        step = "reconnect after handshake";
+        armTimeout(CONNECT_TIMEOUT_MS, "reconnect timed out");
+        handler.postDelayed(() -> {
+            if (inProgress && gatt == null) connectGatt(device);
+        }, 1500);
     }
-
     // --- GATT op queue (Android allows one outstanding op) ---
 
     private void enqueueNotify(BluetoothGatt g, BluetoothGattCharacteristic c) {
@@ -411,39 +637,33 @@ public class WhoopHeartRateMonitor {
         if (v[22] != 0) return null; // off-wrist flag (inner[18])
         return v[12] & 0xFF;
     }
-
     private void setState(State s, String msg) {
         state.postValue(s);
         detail.postValue(msg);
     }
 
-    private void fail(String msg) {
-        Log.w(TAG, msg);
-        handler.post(this::closeInternal);
-        setState(State.RED, msg);
-    }
-
     @SuppressLint("MissingPermission")
-    private void closeInternal() {
-        handler.removeCallbacksAndMessages(null);
+    private void closeGatt() {
         gattQueue.clear();
         gattBusy = false;
-        handler.removeCallbacks(failTimeout);
-        handler.removeCallbacks(dataTimeout);
-        stopScan();
         if (gatt != null) {
+            BluetoothGatt old = gatt;
+            gatt = null;
             try {
-                gatt.disconnect();
-                gatt.close();
+                old.disconnect();
+                old.close();
             } catch (Exception e) {
                 Log.w(TAG, "close", e);
             }
-            gatt = null;
         }
     }
 
-    public void disconnect() {
-        closeInternal();
-        heartRate.postValue(null);
+    private void closeInternal() {
+        cancelTimeout();
+        handler.removeCallbacks(dataTimeout);
+        if (pendingRetry != null) handler.removeCallbacks(pendingRetry);
+        pendingRetry = null;
+        stopScan();
+        closeGatt();
     }
 }

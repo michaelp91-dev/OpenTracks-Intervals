@@ -18,6 +18,9 @@ public class HeartRateHandler extends SensorHandler<HeartRate, HeartRate> {
     @NonNull
     @Override
     protected Driver createDriverBluetooth(String address) {
+        if (de.dennisguse.opentracks.intervals.WhoopHeartRateMonitor.isManagedAddress(getContext(), address)) {
+            return new de.dennisguse.opentracks.intervals.WhoopHeartRateDriver(this);
+        }
         return new BluetoothDriver<>(
                 BluetoothUtils.getAdapter(getContext()),
                 this,

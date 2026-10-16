@@ -155,7 +155,7 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
         recordingStatusConnection = new TrackRecordingServiceConnection(bindChangedCallback);
 
         viewBinding.aggregatedStatsButton.setOnClickListener((view) -> startActivity(IntentUtils.newIntent(this, AggregatedStatisticsActivity.class)));
-        hrMonitor = new WhoopHeartRateMonitor(this);
+        hrMonitor = WhoopHeartRateMonitor.get(this);
         hrMonitor.getState().observe(this, state -> updateHrLight());
         hrMonitor.getHeartRate().observe(this, bpm -> updateHrLight());
         viewBinding.statusLightGps.setOnClickListener(v -> onGpsLightTapped());
@@ -249,9 +249,7 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
 
         PreferencesUtils.registerOnSharedPreferenceChangeListener(sharedPreferenceChangeListener);
         recordingStatusConnection.bind(this);
-        if (hrMonitor.getState().getValue() != WhoopHeartRateMonitor.State.GREEN) {
-            hrMonitor.connect();
-        }
+        hrMonitor.acquire(this);
     }
 
     @Override
@@ -280,7 +278,7 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
 
         PreferencesUtils.unregisterOnSharedPreferenceChangeListener(sharedPreferenceChangeListener);
         recordingStatusConnection.unbind(this);
-        hrMonitor.disconnect();
+        hrMonitor.release(this);
     }
 
     @Override
