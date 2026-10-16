@@ -158,6 +158,8 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
         hrMonitor = WhoopHeartRateMonitor.get(this);
         hrMonitor.getState().observe(this, state -> updateHrLight());
         hrMonitor.getHeartRate().observe(this, bpm -> updateHrLight());
+        hrMonitor.getBattery().observe(this, pct -> updateHrLight());
+        viewBinding.statusBatteryHr.setOnClickListener(v -> onHrLightTapped());
         viewBinding.statusLightGps.setOnClickListener(v -> onGpsLightTapped());
         viewBinding.statusLightGps.setOnLongClickListener(v -> {
             if (!recordingStatus.isRecording() && gpsStatusValue.isGpsStarted()) {
@@ -508,6 +510,15 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
         Integer bpm = hrMonitor.getHeartRate().getValue();
         int color = state == WhoopHeartRateMonitor.State.GREEN ? COLOR_GREEN : state == WhoopHeartRateMonitor.State.YELLOW ? COLOR_YELLOW : COLOR_RED;
         tintLight(viewBinding.statusLightHr, color);
+        Integer battery = hrMonitor.getBattery().getValue();
+        if (state == WhoopHeartRateMonitor.State.GREEN && battery != null) {
+            viewBinding.statusBatteryHr.setVisibility(android.view.View.VISIBLE);
+            viewBinding.statusBatteryHr.setText(battery + "%");
+            if (battery < 20) viewBinding.statusBatteryHr.setTextColor(COLOR_RED);
+            else viewBinding.statusBatteryHr.setTextColor(viewBinding.statusLightHr.getCurrentTextColor());
+        } else {
+            viewBinding.statusBatteryHr.setVisibility(android.view.View.GONE);
+        }
         if (showLiveHeartRate && state == WhoopHeartRateMonitor.State.GREEN && bpm != null) {
             viewBinding.statusLightHr.setText("\u2665 " + bpm + " bpm");
         } else {

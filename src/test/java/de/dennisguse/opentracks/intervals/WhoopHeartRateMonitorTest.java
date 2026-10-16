@@ -57,4 +57,14 @@ public class WhoopHeartRateMonitorTest {
         assertEquals("heart rate unavailable", WhoopHeartRateMonitor.heartRateAnnouncement(142, 30000));
         assertEquals("heart rate unavailable", WhoopHeartRateMonitor.heartRateAnnouncement(null, 0));
     }
+
+    @org.junit.Test
+    public void batteryResponseAndLowWarning() {
+        // 0x24 seq=0 cmd=0x1a resp_seq=3 result=1 deci-percent 823 (0x0337) -> 82%
+        assertEquals(Integer.valueOf(82), WhoopHeartRateMonitor.parseWhoopBatteryResponse(WhoopHeartRateMonitor.whoopFrame(bytes("24001a03013703"))));
+        org.junit.Assert.assertNull(WhoopHeartRateMonitor.parseWhoopBatteryResponse(WhoopHeartRateMonitor.whoopFrame(bytes("24001a03003703"))));
+        org.junit.Assert.assertNull(WhoopHeartRateMonitor.parseWhoopBatteryResponse(WhoopHeartRateMonitor.whoopFrame(bytes("24000b03013703"))));
+        assertEquals("142 beats per minute. WHOOP battery low, 15 percent", WhoopHeartRateMonitor.heartRateAnnouncement(142, 1000, 15));
+        assertEquals("142 beats per minute", WhoopHeartRateMonitor.heartRateAnnouncement(142, 1000, 50));
+    }
 }

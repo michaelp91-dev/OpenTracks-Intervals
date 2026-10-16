@@ -69,6 +69,11 @@ public class WhoopHeartRateMonitor {
     static final int WHOOP_EVENT_DOUBLE_TAP = 14;
     private static final long DOUBLE_TAP_DEBOUNCE_MS = 1000;
     private static final long HR_FRESH_MS = 10_000;
+    private static final UUID BATTERY_SERVICE = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb");
+    private static final UUID BATTERY_LEVEL = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb");
+    private static final int WHOOP_PACKET_COMMAND_RESPONSE = 0x24;
+    private static final long BATTERY_REFRESH_MS = 5 * 60_000;
+    static final int BATTERY_LOW_PERCENT = 20;
     private static final UUID WHOOP_DATA_FROM_STRAP = UUID.fromString("61080005-8d6d-82b8-614a-1c8cb0f8dcc6");
     private static final int WHOOP_PACKET_COMMAND = 0x23;
     private static final int WHOOP_PACKET_REALTIME_DATA = 0x28;
@@ -112,6 +117,7 @@ public class WhoopHeartRateMonitor {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final MutableLiveData<State> state = new MutableLiveData<>(State.RED);
     private final MutableLiveData<Integer> heartRate = new MutableLiveData<>(null);
+    private final MutableLiveData<Integer> battery = new MutableLiveData<>(null);
     private final MutableLiveData<String> detail = new MutableLiveData<>("Not connected");
     private final Set<Object> holders = new HashSet<>();
     private final CopyOnWriteArraySet<HeartRateListener> listeners = new CopyOnWriteArraySet<>();
@@ -135,6 +141,16 @@ public class WhoopHeartRateMonitor {
     private long lastTapMs = 0;
     private long lastHrMs = 0;
     private int lastBpm = 0;
+    private Integer lastBattery = null;
+    private BluetoothGattCharacteristic batteryChar;
+    private BluetoothGattCharacteristic cmdOutChar;
+    private final Runnable batteryRefresh = new Runnable() {
+        @Override
+        public void run() {
+            if (gatt != null && connected) requestBattery(gatt);
+            handler.postDelayed(this, BATTERY_REFRESH_MS);
+        }
+    };
     private de.dennisguse.opentracks.services.announcement.TTSManager tts;
 
     private WhoopHeartRateMonitor(Context context) {
@@ -154,6 +170,7 @@ public class WhoopHeartRateMonitor {
     public LiveData<State> getState() { return state; }
     public LiveData<Integer> getHeartRate() { return heartRate; }
     public LiveData<String> getDetail() { return detail; }
+    public LiveData<Integer> getBattery() { return battery; }
 
     @Nullable
     public String getDeviceName() { return deviceName; }
@@ -389,6 +406,8 @@ public class WhoopHeartRateMonitor {
             connected = true;
             inProgress = false;
             step = "streaming";
+            handler.removeCallbacks(batteryRefresh);
+            handler.postDelayed(batteryRefresh, BATTERY_REFRESH_MS);
             if (currentDevice != null) {
                 String address = currentDevice.getAddress();
                 prefs.edit().putString(KEY_ADDRESS, address).apply();
@@ -451,6 +470,9 @@ public class WhoopHeartRateMonitor {
                     return;
                 }
                 step = "subscribe";
+                BluetoothGattService batService = g.getService(BATTERY_SERVICE);
+                batteryChar = batService != null ? batService.getCharacteristic(BATTERY_LEVEL) : null;
+                cmdOutChar = whoop != null ? whoop.getCharacteristic(WHOOP_CMD_TO_STRAP) : null;
                 if (hr != null) enqueueNotify(g, hr);
                 if (whoop != null) {
                     BluetoothGattCharacteristic cmdIn = whoop.getCharacteristic(WHOOP_CMD_FROM_STRAP);
@@ -477,6 +499,7 @@ public class WhoopHeartRateMonitor {
                         }
                     }
                 }
+                if (batteryChar != null) enqueueRead(g, batteryChar);
                 setState(State.YELLOW, "Waiting for heart rate" + attemptLabel() + "…");
                 cancelTimeout();
                 handler.removeCallbacks(dataTimeout);
@@ -491,6 +514,27 @@ public class WhoopHeartRateMonitor {
                 if (g != gatt) return;
                 opDone();
             });
+        }
+
+        @Override
+        public void onCharacteristicRead(@NonNull BluetoothGatt g, @NonNull BluetoothGattCharacteristic c, @NonNull byte[] value, int status) {
+            handler.post(() -> {
+                if (g != gatt) return;
+                if (status == BluetoothGatt.GATT_SUCCESS && BATTERY_LEVEL.equals(c.getUuid()) && value.length > 0) {
+                    int pct = value[0] & 0xFF;
+                    if (pct <= 100) onBattery(pct, "0x2A19");
+                }
+                opDone();
+            });
+        }
+
+        @SuppressWarnings("deprecation")
+        @Override
+        public void onCharacteristicRead(BluetoothGatt g, BluetoothGattCharacteristic c, int status) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                byte[] v = c.getValue();
+                onCharacteristicRead(g, c, v != null ? v.clone() : new byte[0], status);
+            }
         }
 
         @Override
@@ -509,6 +553,11 @@ public class WhoopHeartRateMonitor {
                 bpm = parseStandardHr(value);
             } else if (WHOOP_DATA_FROM_STRAP.equals(c.getUuid())) {
                 bpm = parseWhoopRealtimeHr(value);
+            }
+            if (WHOOP_CMD_FROM_STRAP.equals(c.getUuid())) {
+                Integer pct = parseWhoopBatteryResponse(value);
+                if (pct != null) handler.post(() -> { if (g == gatt) onBattery(pct, "cmd 0x1a"); });
+                return;
             }
             if (WHOOP_EVENTS_FROM_STRAP.equals(c.getUuid())) {
                 Integer eventId = parseWhoopEventId(value);
@@ -544,12 +593,42 @@ public class WhoopHeartRateMonitor {
             tts = new de.dennisguse.opentracks.services.announcement.TTSManager(context);
             tts.start();
         }
-        tts.speak(heartRateAnnouncement(lastHrMs > 0 ? lastBpm : null, now - lastHrMs));
+        tts.speak(heartRateAnnouncement(lastHrMs > 0 ? lastBpm : null, now - lastHrMs, lastBattery));
     }
 
     static String heartRateAnnouncement(@Nullable Integer bpm, long ageMs) {
-        if (bpm == null || bpm <= 0 || ageMs > HR_FRESH_MS) return "heart rate unavailable";
-        return bpm + " beats per minute";
+        return heartRateAnnouncement(bpm, ageMs, null);
+    }
+
+    static String heartRateAnnouncement(@Nullable Integer bpm, long ageMs, @Nullable Integer batteryPct) {
+        String s = (bpm == null || bpm <= 0 || ageMs > HR_FRESH_MS) ? "heart rate unavailable" : bpm + " beats per minute";
+        if (batteryPct != null && batteryPct < BATTERY_LOW_PERCENT) s += ". WHOOP battery low, " + batteryPct + " percent";
+        return s;
+    }
+
+    private void onBattery(int pct, String source) {
+        Log.i(TAG, "Battery " + pct + "% via " + source);
+        lastBattery = pct;
+        battery.postValue(pct);
+    }
+
+    private void requestBattery(BluetoothGatt g) {
+        if (cmdOutChar != null) enqueueWrite(g, cmdOutChar, whoopCommand(WHOOP_CMD_GET_BATTERY, new byte[0]));
+        if (batteryChar != null) enqueueRead(g, batteryChar);
+        nextOp();
+    }
+
+    /**
+     * WHOOP 4.0 COMMAND_RESPONSE (type 0x24) to GET_BATTERY_LEVEL (0x1a):
+     * AA len crc8 | [4]=0x24 [5]=seq [6]=resp_cmd [7]=resp_seq [8]=result(1=SUCCESS) [9..10]=u16 LE deci-percent | crc32.
+     * (noop docs: 4.0 reports deci-percent, /10.) Returns 0..100 or null.
+     */
+    static Integer parseWhoopBatteryResponse(byte[] v) {
+        if (v.length < 11 || (v[0] & 0xFF) != 0xAA || (v[4] & 0xFF) != WHOOP_PACKET_COMMAND_RESPONSE) return null;
+        if ((v[6] & 0xFF) != WHOOP_CMD_GET_BATTERY || (v[8] & 0xFF) != 1) return null;
+        int raw = (v[9] & 0xFF) | ((v[10] & 0xFF) << 8);
+        if (raw > 1000) return null;
+        return Math.round(raw / 10f);
     }
 
     /** EVENT frame: AA len crc8 | 0x30 seq event_id(u16 LE) ... ; returns event id or null. */
@@ -576,6 +655,11 @@ public class WhoopHeartRateMonitor {
         gattQueue.add(() -> writeCccd(g, c));
     }
 
+    @SuppressLint("MissingPermission")
+    private void enqueueRead(BluetoothGatt g, BluetoothGattCharacteristic c) {
+        gattQueue.add(() -> readCharacteristicOp(g, c));
+    }
+
     private void enqueueWrite(BluetoothGatt g, BluetoothGattCharacteristic c, byte[] value) {
         gattQueue.add(() -> writeCharacteristic(g, c, value));
     }
@@ -595,6 +679,12 @@ public class WhoopHeartRateMonitor {
             gattBusy = false;
             nextOp();
         });
+    }
+
+    @SuppressLint("MissingPermission")
+    @SuppressWarnings("deprecation")
+    private void readCharacteristicOp(BluetoothGatt g, BluetoothGattCharacteristic c) {
+        if (!g.readCharacteristic(c)) opDone();
     }
 
     @SuppressLint("MissingPermission")
@@ -708,6 +798,7 @@ public class WhoopHeartRateMonitor {
     private void closeInternal() {
         cancelTimeout();
         handler.removeCallbacks(dataTimeout);
+        handler.removeCallbacks(batteryRefresh);
         if (pendingRetry != null) handler.removeCallbacks(pendingRetry);
         pendingRetry = null;
         stopScan();
