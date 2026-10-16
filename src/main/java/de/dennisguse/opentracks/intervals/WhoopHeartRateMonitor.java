@@ -37,8 +37,10 @@ import de.dennisguse.opentracks.util.PermissionRequester;
  * Lightweight BLE heart-rate client used by the start screen status light.
  * Connects to the heart-rate sensor configured in the sensor settings; if none is configured,
  * scans for the first device whose name starts with "WHOOP" and saves it as the heart-rate sensor
- * (so recordings pick it up too). Uses the standard Heart Rate Service (0x180D), which WHOOP
- * exposes when "Heart Rate Broadcast" is enabled in the WHOOP app.
+ * (so recordings pick it up too). Reads standard HR (0x2A37). For a WHOOP 4.0 it also sends the
+ * WHOOP "broadcast HR on" command (cmd 0x0e, data 01) on the custom service, which turns on the
+ * standard HR service without the WHOOP app/subscription, and parses realtime HR frames from
+ * DATA_FROM_STRAP as a fallback.
  */
 public class WhoopHeartRateMonitor {
 
@@ -47,6 +49,16 @@ public class WhoopHeartRateMonitor {
     private static final String TAG = WhoopHeartRateMonitor.class.getSimpleName();
     private static final UUID HR_SERVICE = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb");
     private static final UUID HR_MEASUREMENT = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb");
+    // WHOOP 4.0 custom service (see GrokDrop/Projects/whoop-ble-protocol.md)
+    private static final UUID WHOOP_SERVICE = UUID.fromString("61080001-8d6d-82b8-614a-1c8cb0f8dcc6");
+    private static final UUID WHOOP_CMD_TO_STRAP = UUID.fromString("61080002-8d6d-82b8-614a-1c8cb0f8dcc6");
+    private static final UUID WHOOP_CMD_FROM_STRAP = UUID.fromString("61080003-8d6d-82b8-614a-1c8cb0f8dcc6");
+    private static final UUID WHOOP_DATA_FROM_STRAP = UUID.fromString("61080005-8d6d-82b8-614a-1c8cb0f8dcc6");
+    private static final int WHOOP_PACKET_COMMAND = 0x23;
+    private static final int WHOOP_PACKET_REALTIME_DATA = 0x28;
+    private static final int WHOOP_CMD_TOGGLE_HR_BROADCAST = 0x0e; // TOGGLE_GENERIC_HR_PROFILE -> standard 0x180D
+    private static final int WHOOP_CMD_TOGGLE_REALTIME_HR = 0x03;  // 1 Hz HR in 0x28 frames on DATA_FROM_STRAP
+    private static final int WHOOP_CMD_GET_BATTERY = 0x1a;
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private static final long SCAN_TIMEOUT_MS = 20_000;
     private static final long CONNECT_TIMEOUT_MS = 25_000;
@@ -59,6 +71,11 @@ public class WhoopHeartRateMonitor {
     private final MutableLiveData<String> detail = new MutableLiveData<>("Not connected");
 
     private BluetoothGatt gatt;
+    private final java.util.ArrayDeque<Runnable> gattQueue = new java.util.ArrayDeque<>();
+    private boolean gattBusy = false;
+    private int whoopSeq = 1;
+    private boolean handshakeReconnectDone = false;
+    private BluetoothDevice currentDevice;
     private BluetoothLeScanner scanner;
     private ScanCallback scanCallback;
     private String deviceName;
@@ -66,7 +83,7 @@ public class WhoopHeartRateMonitor {
     private final Runnable failTimeout = () -> fail("Timed out connecting");
     private final Runnable dataTimeout = () -> {
         heartRate.postValue(null);
-        fail("No heart rate data (is Heart Rate Broadcast on?)");
+        fail("No heart rate data from strap");
     };
 
     public WhoopHeartRateMonitor(Context context) {
@@ -93,6 +110,7 @@ public class WhoopHeartRateMonitor {
     @SuppressLint("MissingPermission")
     public void connect() {
         disconnect();
+        handshakeReconnectDone = false;
         if (!PermissionRequester.BLUETOOTH.hasPermission(context)) {
             fail("Bluetooth permission missing");
             return;
@@ -127,7 +145,9 @@ public class WhoopHeartRateMonitor {
                 BluetoothDevice device = result.getDevice();
                 String name = result.getScanRecord() != null ? result.getScanRecord().getDeviceName() : null;
                 if (name == null) name = device.getName();
-                if (name != null && name.toUpperCase(Locale.US).startsWith("WHOOP")) {
+                boolean whoopService = result.getScanRecord() != null && result.getScanRecord().getServiceUuids() != null
+                        && result.getScanRecord().getServiceUuids().contains(new android.os.ParcelUuid(WHOOP_SERVICE));
+                if ((name != null && name.toUpperCase(Locale.US).startsWith("WHOOP")) || whoopService) {
                     Log.i(TAG, "Found " + name + " " + device.getAddress());
                     stopScan();
                     PreferencesUtils.setString(R.string.settings_sensor_bluetooth_heart_rate_key, device.getAddress());
@@ -161,6 +181,7 @@ public class WhoopHeartRateMonitor {
 
     @SuppressLint("MissingPermission")
     private void connectGatt(BluetoothDevice device) {
+        currentDevice = device;
         deviceName = device.getName() != null ? device.getName() : device.getAddress();
         setState(State.YELLOW, "Connecting to " + deviceName + "…");
         gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
@@ -184,33 +205,63 @@ public class WhoopHeartRateMonitor {
         @Override
         public void onServicesDiscovered(BluetoothGatt g, int status) {
             if (g != gatt) return;
-            BluetoothGattService service = g.getService(HR_SERVICE);
-            BluetoothGattCharacteristic c = service != null ? service.getCharacteristic(HR_MEASUREMENT) : null;
-            if (c == null) {
-                fail("No heart rate service: turn on Heart Rate Broadcast in the WHOOP app");
+            BluetoothGattService hrService = g.getService(HR_SERVICE);
+            BluetoothGattCharacteristic hr = hrService != null ? hrService.getCharacteristic(HR_MEASUREMENT) : null;
+            BluetoothGattService whoop = g.getService(WHOOP_SERVICE);
+            if (hr == null && whoop == null) {
+                fail("Device has no heart rate or WHOOP service");
                 return;
             }
-            g.setCharacteristicNotification(c, true);
-            BluetoothGattDescriptor d = c.getDescriptor(CCCD);
-            if (d != null) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    g.writeDescriptor(d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-                } else {
-                    d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-                    g.writeDescriptor(d);
+            if (hr != null) enqueueNotify(g, hr);
+            if (whoop != null) {
+                BluetoothGattCharacteristic cmdIn = whoop.getCharacteristic(WHOOP_CMD_FROM_STRAP);
+                BluetoothGattCharacteristic data = whoop.getCharacteristic(WHOOP_DATA_FROM_STRAP);
+                BluetoothGattCharacteristic cmdOut = whoop.getCharacteristic(WHOOP_CMD_TO_STRAP);
+                if (cmdIn != null) enqueueNotify(g, cmdIn);
+                if (data != null) enqueueNotify(g, data);
+                if (cmdOut != null && hr == null) {
+                    // Handshake (same as Michael's working 10/14 Mac script hr_broadcast_on.py):
+                    // battery query, then TOGGLE_GENERIC_HR_PROFILE [01] -> strap exposes standard 0x180D.
+                    // Also TOGGLE_REALTIME_HR [01] so HR flows on DATA_FROM_STRAP meanwhile.
+                    enqueueWrite(g, cmdOut, whoopCommand(WHOOP_CMD_GET_BATTERY, new byte[0]));
+                    enqueueWrite(g, cmdOut, whoopCommand(WHOOP_CMD_TOGGLE_HR_BROADCAST, new byte[]{0x01}));
+                    enqueueWrite(g, cmdOut, whoopCommand(WHOOP_CMD_TOGGLE_REALTIME_HR, new byte[]{0x01}));
+                    if (!handshakeReconnectDone) {
+                        // The 0x180D service only shows up after a reconnect (as in the Mac script).
+                        handshakeReconnectDone = true;
+                        handler.postDelayed(WhoopHeartRateMonitor.this::reconnectAfterHandshake, 4000);
+                    }
                 }
             }
             setState(State.YELLOW, "Waiting for heart rate…");
             handler.removeCallbacks(dataTimeout);
             handler.postDelayed(dataTimeout, DATA_TIMEOUT_MS);
+            nextOp();
+        }
+
+        @Override
+        public void onDescriptorWrite(BluetoothGatt g, BluetoothGattDescriptor d, int status) {
+            if (g != gatt) return;
+            opDone();
+        }
+
+        @Override
+        public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int status) {
+            if (g != gatt) return;
+            Log.i(TAG, "write " + c.getUuid() + " status " + status);
+            opDone();
         }
 
         @Override
         public void onCharacteristicChanged(@NonNull BluetoothGatt g, @NonNull BluetoothGattCharacteristic c, @NonNull byte[] value) {
-            if (g != gatt || !HR_MEASUREMENT.equals(c.getUuid()) || value.length < 2) return;
-            int bpm = (value[0] & 0x01) != 0 && value.length >= 3
-                    ? (value[1] & 0xFF) | ((value[2] & 0xFF) << 8)
-                    : value[1] & 0xFF;
+            if (g != gatt) return;
+            Integer bpm = null;
+            if (HR_MEASUREMENT.equals(c.getUuid())) {
+                bpm = parseStandardHr(value);
+            } else if (WHOOP_DATA_FROM_STRAP.equals(c.getUuid())) {
+                bpm = parseWhoopRealtimeHr(value);
+            }
+            if (bpm == null || bpm <= 0) return;
             handler.removeCallbacks(failTimeout);
             handler.removeCallbacks(dataTimeout);
             handler.postDelayed(dataTimeout, DATA_TIMEOUT_MS);
@@ -228,6 +279,139 @@ public class WhoopHeartRateMonitor {
         }
     };
 
+    @SuppressLint("MissingPermission")
+    private void reconnectAfterHandshake() {
+        if (gatt == null || currentDevice == null) return;
+        Log.i(TAG, "Reconnecting after WHOOP handshake to pick up 0x180D");
+        BluetoothDevice device = currentDevice;
+        BluetoothGatt old = gatt;
+        gatt = null;
+        gattQueue.clear();
+        gattBusy = false;
+        try {
+            old.disconnect();
+            old.close();
+        } catch (Exception e) {
+            Log.w(TAG, "close", e);
+        }
+        handler.postDelayed(() -> connectGatt(device), 1500);
+    }
+
+    // --- GATT op queue (Android allows one outstanding op) ---
+
+    private void enqueueNotify(BluetoothGatt g, BluetoothGattCharacteristic c) {
+        gattQueue.add(() -> writeCccd(g, c));
+    }
+
+    private void enqueueWrite(BluetoothGatt g, BluetoothGattCharacteristic c, byte[] value) {
+        gattQueue.add(() -> writeCharacteristic(g, c, value));
+    }
+
+    private void nextOp() {
+        handler.post(() -> {
+            if (gattBusy || gatt == null) return;
+            Runnable op = gattQueue.poll();
+            if (op == null) return;
+            gattBusy = true;
+            op.run();
+        });
+    }
+
+    private void opDone() {
+        handler.post(() -> {
+            gattBusy = false;
+            nextOp();
+        });
+    }
+
+    @SuppressLint("MissingPermission")
+    @SuppressWarnings("deprecation")
+    private void writeCccd(BluetoothGatt g, BluetoothGattCharacteristic c) {
+        g.setCharacteristicNotification(c, true);
+        BluetoothGattDescriptor d = c.getDescriptor(CCCD);
+        if (d == null) {
+            opDone();
+            return;
+        }
+        boolean ok;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ok = g.writeDescriptor(d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothGatt.GATT_SUCCESS;
+        } else {
+            d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+            ok = g.writeDescriptor(d);
+        }
+        if (!ok) opDone();
+    }
+
+    @SuppressLint("MissingPermission")
+    @SuppressWarnings("deprecation")
+    private void writeCharacteristic(BluetoothGatt g, BluetoothGattCharacteristic c, byte[] value) {
+        boolean ok;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ok = g.writeCharacteristic(c, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothGatt.GATT_SUCCESS;
+        } else {
+            c.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+            c.setValue(value);
+            ok = g.writeCharacteristic(c);
+        }
+        if (!ok) opDone();
+    }
+
+    // --- WHOOP framing: AA | len u16 LE | crc8(len) | payload | crc32(payload) LE ; len = payload + 4 ---
+
+    byte[] whoopCommand(int command, byte[] data) {
+        byte[] payload = new byte[3 + data.length];
+        payload[0] = (byte) WHOOP_PACKET_COMMAND;
+        payload[1] = (byte) (whoopSeq++ & 0xFF);
+        payload[2] = (byte) command;
+        System.arraycopy(data, 0, payload, 3, data.length);
+        return whoopFrame(payload);
+    }
+
+    static byte[] whoopFrame(byte[] inner) {
+        // Inner content is zero-padded to a multiple of 4 bytes (openstrap pad4).
+        byte[] payload = java.util.Arrays.copyOf(inner, (inner.length + 3) / 4 * 4);
+        int len = payload.length + 4;
+        byte[] out = new byte[4 + payload.length + 4];
+        out[0] = (byte) 0xAA;
+        out[1] = (byte) (len & 0xFF);
+        out[2] = (byte) ((len >> 8) & 0xFF);
+        out[3] = (byte) crc8(new byte[]{out[1], out[2]});
+        System.arraycopy(payload, 0, out, 4, payload.length);
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        crc.update(payload);
+        long v = crc.getValue();
+        int o = 4 + payload.length;
+        for (int k = 0; k < 4; k++) out[o + k] = (byte) ((v >> (8 * k)) & 0xFF);
+        return out;
+    }
+
+    static int crc8(byte[] data) {
+        int c = 0;
+        for (byte b : data) {
+            c ^= b & 0xFF;
+            for (int k = 0; k < 8; k++) {
+                c = (c & 0x80) != 0 ? ((c << 1) ^ 0x07) & 0xFF : (c << 1) & 0xFF;
+            }
+        }
+        return c;
+    }
+
+    static Integer parseStandardHr(byte[] v) {
+        if (v.length < 2) return null;
+        if ((v[0] & 0x01) != 0) {
+            return v.length >= 3 ? (v[1] & 0xFF) | ((v[2] & 0xFF) << 8) : null;
+        }
+        return v[1] & 0xFF;
+    }
+
+    /** Realtime frame: AA len crc8 | 0x28 seq unix(4) subsec(2) HR ... | crc32. HR at byte 12. */
+    static Integer parseWhoopRealtimeHr(byte[] v) {
+        if (v.length < 23 || (v[0] & 0xFF) != 0xAA || (v[4] & 0xFF) != WHOOP_PACKET_REALTIME_DATA) return null;
+        if (v[22] != 0) return null; // off-wrist flag (inner[18])
+        return v[12] & 0xFF;
+    }
+
     private void setState(State s, String msg) {
         state.postValue(s);
         detail.postValue(msg);
@@ -241,6 +425,9 @@ public class WhoopHeartRateMonitor {
 
     @SuppressLint("MissingPermission")
     private void closeInternal() {
+        handler.removeCallbacksAndMessages(null);
+        gattQueue.clear();
+        gattBusy = false;
         handler.removeCallbacks(failTimeout);
         handler.removeCallbacks(dataTimeout);
         stopScan();
