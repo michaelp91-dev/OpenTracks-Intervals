@@ -29,15 +29,12 @@ public class GpsHandler extends SensorHandler<Location, Position> {
     private Distance thresholdHorizontalAccuracy;
 
     private final SharedPreferences.OnSharedPreferenceChangeListener sharedPreferenceChangeListener = (sharedPreferences, key) -> {
-        if (PreferencesUtils.isKey(R.string.recording_distance_interval_key, key)) {
-            if (gpsStatusManager != null) {
-                Distance gpsMinDistance = PreferencesUtils.getRecordingDistanceInterval();
-                gpsStatusManager.onRecordingDistanceChanged(gpsMinDistance);
-            }
-        }
-
         if (PreferencesUtils.isKey(R.string.recording_gps_accuracy_key, key)) {
             thresholdHorizontalAccuracy = PreferencesUtils.getThresholdHorizontalAccuracy();
+            // Intervals: status light judges fixes by the GPS accuracy setting, not the recording distance.
+            if (gpsStatusManager != null) {
+                gpsStatusManager.onRecordingDistanceChanged(thresholdHorizontalAccuracy);
+            }
         }
 
         if (PreferencesUtils.isKey(R.string.min_sampling_interval_key, key)) {

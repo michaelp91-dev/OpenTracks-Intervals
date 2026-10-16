@@ -47,7 +47,7 @@ class GpsStatusManager {
         this.context = context;
         this.handler = handler;
 
-        onRecordingDistanceChanged(PreferencesUtils.getRecordingDistanceInterval());
+        onRecordingDistanceChanged(PreferencesUtils.getThresholdHorizontalAccuracy()); // Intervals: use GPS accuracy setting
         onMinSamplingIntervalChanged(PreferencesUtils.getMinSamplingInterval());
     }
 
