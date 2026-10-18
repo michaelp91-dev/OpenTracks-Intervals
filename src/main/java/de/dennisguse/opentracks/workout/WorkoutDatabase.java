@@ -28,8 +28,11 @@ import java.util.List;
 public final class WorkoutDatabase extends SQLiteOpenHelper {
 
     static final String NAME = "workouts.db";
-    /** 2: sensor file table. 3: repeat blocks ({@code block_id}, {@code block_rounds} on segments). */
-    private static final int VERSION = 3;
+    /**
+     * 2: sensor file table. 3: repeat blocks ({@code block_id}, {@code block_rounds} on segments).
+     * 4: user order of the Workouts list ({@code sort_order} on workouts).
+     */
+    private static final int VERSION = 4;
 
     static final String TABLE_WORKOUTS = "workouts";
     static final String TABLE_SEGMENTS = "workout_segments";
@@ -64,7 +67,8 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE " + TABLE_WORKOUTS + " ("
                 + "_id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 + "name TEXT NOT NULL,"
-                + "builtin INTEGER NOT NULL DEFAULT 0)");
+                + "builtin INTEGER NOT NULL DEFAULT 0,"
+                + "sort_order INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE TABLE " + TABLE_SEGMENTS + " ("
                 + "_id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 + "workout_id INTEGER NOT NULL REFERENCES " + TABLE_WORKOUTS + "(_id) ON DELETE CASCADE,"
@@ -97,6 +101,10 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
             db.execSQL("ALTER TABLE " + TABLE_SEGMENTS + " ADD COLUMN block_id INTEGER");
             db.execSQL("ALTER TABLE " + TABLE_SEGMENTS + " ADD COLUMN block_rounds INTEGER");
         }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE " + TABLE_WORKOUTS + " ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0");
+            db.execSQL(WorkoutOrder.MIGRATE_SQL);
+        }
     }
 
     private static void seed(SQLiteDatabase db) {
@@ -104,6 +112,7 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
         ContentValues values = new ContentValues();
         values.put("name", preset.name());
         values.put("builtin", 1);
+        values.put("sort_order", 0);
         long id = db.insertOrThrow(TABLE_WORKOUTS, null, values);
         insertItems(db, id, preset.items());
     }

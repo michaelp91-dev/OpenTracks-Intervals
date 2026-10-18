@@ -24,7 +24,9 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
+import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import de.dennisguse.opentracks.AbstractActivity;
 import de.dennisguse.opentracks.R;
@@ -44,6 +46,7 @@ public class WorkoutsActivity extends AbstractActivity implements WorkoutListAda
     private WorkoutsActivityBinding viewBinding;
     private WorkoutListAdapter adapter;
     private WorkoutRepository repository;
+    private ItemTouchHelper touchHelper;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,6 +56,8 @@ public class WorkoutsActivity extends AbstractActivity implements WorkoutListAda
         adapter = new WorkoutListAdapter(this);
         viewBinding.workoutList.setLayoutManager(new LinearLayoutManager(this));
         viewBinding.workoutList.setAdapter(adapter);
+        touchHelper = new ItemTouchHelper(new SortAndSwipeCallback());
+        touchHelper.attachToRecyclerView(viewBinding.workoutList);
         setSupportActionBar(viewBinding.workoutToolbar);
         if (getSupportActionBar() != null) {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
@@ -129,8 +134,21 @@ public class WorkoutsActivity extends AbstractActivity implements WorkoutListAda
 
     @Override
     public void onDelete(Workout workout) {
+        confirmDelete(workout, null);
+    }
+
+    @Override
+    public void onStartDrag(RecyclerView.ViewHolder holder) {
+        touchHelper.startDrag(holder);
+    }
+
+    /** @param onKeep runs when the user cancels, so a swiped row can slide back */
+    private void confirmDelete(Workout workout, Runnable onKeep) {
         if (workout.builtin()) {
             Toast.makeText(this, R.string.workout_builtin_kept, Toast.LENGTH_LONG).show();
+            if (onKeep != null) {
+                onKeep.run();
+            }
             return;
         }
         new AlertDialog.Builder(this)
@@ -141,8 +159,70 @@ public class WorkoutsActivity extends AbstractActivity implements WorkoutListAda
                     }
                     reload();
                 })
-                .setNegativeButton(android.R.string.cancel, null)
+                .setNegativeButton(android.R.string.cancel, (dialog, which) -> {
+                    if (onKeep != null) {
+                        onKeep.run();
+                    }
+                })
+                .setOnCancelListener(dialog -> {
+                    if (onKeep != null) {
+                        onKeep.run();
+                    }
+                })
                 .show();
+    }
+
+    /** Drag by the handle to reorder (saved when the drag ends); swipe a custom workout sideways to delete it. */
+    private final class SortAndSwipeCallback extends ItemTouchHelper.SimpleCallback {
+        private boolean moved;
+
+        SortAndSwipeCallback() {
+            super(ItemTouchHelper.UP | ItemTouchHelper.DOWN, ItemTouchHelper.LEFT | ItemTouchHelper.RIGHT);
+        }
+
+        @Override
+        public boolean isLongPressDragEnabled() {
+            return false; // long-press opens the row menu
+        }
+
+        @Override
+        public int getSwipeDirs(@NonNull RecyclerView recyclerView, @NonNull RecyclerView.ViewHolder viewHolder) {
+            int position = viewHolder.getBindingAdapterPosition();
+            if (position == RecyclerView.NO_POSITION || adapter.workoutAt(position).builtin()) {
+                return 0;
+            }
+            return super.getSwipeDirs(recyclerView, viewHolder);
+        }
+
+        @Override
+        public boolean onMove(@NonNull RecyclerView recyclerView, @NonNull RecyclerView.ViewHolder from, @NonNull RecyclerView.ViewHolder to) {
+            int fromPosition = from.getBindingAdapterPosition();
+            int toPosition = to.getBindingAdapterPosition();
+            if (fromPosition == RecyclerView.NO_POSITION || toPosition == RecyclerView.NO_POSITION) {
+                return false;
+            }
+            adapter.moveItem(fromPosition, toPosition);
+            moved = true;
+            return true;
+        }
+
+        @Override
+        public void clearView(@NonNull RecyclerView recyclerView, @NonNull RecyclerView.ViewHolder viewHolder) {
+            super.clearView(recyclerView, viewHolder);
+            if (moved) {
+                moved = false;
+                repository.saveOrder(adapter.ids());
+            }
+        }
+
+        @Override
+        public void onSwiped(@NonNull RecyclerView.ViewHolder viewHolder, int direction) {
+            int position = viewHolder.getBindingAdapterPosition();
+            if (position == RecyclerView.NO_POSITION) {
+                return;
+            }
+            confirmDelete(adapter.workoutAt(position), () -> adapter.notifyItemChanged(position));
+        }
     }
 
     @Override

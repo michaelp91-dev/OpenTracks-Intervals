@@ -18,6 +18,7 @@ package de.dennisguse.opentracks.ui.workout;
 import android.annotation.SuppressLint;
 import android.view.LayoutInflater;
 import android.view.MenuItem;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.PopupMenu;
@@ -43,6 +44,9 @@ public class WorkoutListAdapter extends RecyclerView.Adapter<WorkoutListAdapter.
         void onDelete(Workout workout);
 
         void onReset(Workout workout);
+
+        /** The user pressed the drag handle of this row. */
+        void onStartDrag(RecyclerView.ViewHolder holder);
     }
 
     private final Listener listener;
@@ -57,6 +61,28 @@ public class WorkoutListAdapter extends RecyclerView.Adapter<WorkoutListAdapter.
         workouts.clear();
         workouts.addAll(items);
         notifyDataSetChanged();
+    }
+
+    public Workout workoutAt(int position) {
+        return workouts.get(position);
+    }
+
+    /** Moves a row while dragging; the caller stores the order when the drag ends. */
+    public void moveItem(int from, int to) {
+        if (from == to || from < 0 || to < 0 || from >= workouts.size() || to >= workouts.size()) {
+            return;
+        }
+        workouts.add(to, workouts.remove(from));
+        notifyItemMoved(from, to);
+    }
+
+    /** Workout ids in the order shown, top first. */
+    public List<Long> ids() {
+        List<Long> ids = new ArrayList<>();
+        for (Workout workout : workouts) {
+            ids.add(workout.id());
+        }
+        return ids;
     }
 
     @NonNull
@@ -79,9 +105,16 @@ public class WorkoutListAdapter extends RecyclerView.Adapter<WorkoutListAdapter.
     class Holder extends RecyclerView.ViewHolder {
         private final WorkoutListItemBinding binding;
 
+        @SuppressLint("ClickableViewAccessibility") // The handle only starts a drag; the row menu offers the same actions.
         Holder(WorkoutListItemBinding binding) {
             super(binding.getRoot());
             this.binding = binding;
+            binding.workoutItemDrag.setOnTouchListener((v, event) -> {
+                if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                    listener.onStartDrag(this);
+                }
+                return false;
+            });
         }
 
         void bind(Workout workout) {

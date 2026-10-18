@@ -37,6 +37,7 @@ limitations under the License.
         <item quantity="other">%1$d segments · %2$s</item>
     </plurals>
     <string name="workout_list_empty" translatable="false">No workouts yet</string>
+    <string name="workout_drag_handle" translatable="false">Drag to reorder</string>
     <string name="workout_item_actions" translatable="false">Workout actions</string>
     <string name="workout_delete_confirm" translatable="false">Delete %1$s?</string>
     <string name="workout_builtin_kept" translatable="false">Built-in workouts cannot be deleted. Reset restores the original plan.</string>

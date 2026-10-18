@@ -49,7 +49,7 @@ public final class WorkoutRepository {
     public synchronized List<Workout> listWorkouts() {
         SQLiteDatabase db = helper.getReadableDatabase();
         List<Long> ids = new ArrayList<>();
-        try (Cursor cursor = db.query(WorkoutDatabase.TABLE_WORKOUTS, new String[]{"_id"}, null, null, null, null, "_id ASC")) {
+        try (Cursor cursor = db.query(WorkoutDatabase.TABLE_WORKOUTS, new String[]{"_id"}, null, null, null, null, WorkoutOrder.ORDER_BY)) {
             while (cursor.moveToNext()) {
                 ids.add(cursor.getLong(0));
             }
@@ -91,6 +91,7 @@ public final class WorkoutRepository {
             values.put("name", workout.name());
             if (id <= 0) {
                 values.put("builtin", workout.builtin() ? 1 : 0);
+                values.put("sort_order", WorkoutOrder.next(maxSortOrder(db)));
                 id = db.insertOrThrow(WorkoutDatabase.TABLE_WORKOUTS, null, values);
             } else {
                 db.update(WorkoutDatabase.TABLE_WORKOUTS, values, "_id=?", new String[]{Long.toString(id)});
@@ -101,6 +102,31 @@ public final class WorkoutRepository {
             return id;
         } finally {
             db.endTransaction();
+        }
+    }
+
+    /** Stores the Workouts list order; {@code ids} is the full list, top first. */
+    public synchronized void saveOrder(List<Long> ids) {
+        SQLiteDatabase db = helper.getWritableDatabase();
+        db.beginTransaction();
+        try {
+            for (int i = 0; i < ids.size(); i++) {
+                ContentValues values = new ContentValues();
+                values.put("sort_order", i);
+                db.update(WorkoutDatabase.TABLE_WORKOUTS, values, "_id=?", new String[]{Long.toString(ids.get(i))});
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    private static Long maxSortOrder(SQLiteDatabase db) {
+        try (Cursor cursor = db.rawQuery("SELECT MAX(sort_order) FROM " + WorkoutDatabase.TABLE_WORKOUTS, null)) {
+            if (!cursor.moveToFirst() || cursor.isNull(0)) {
+                return null;
+            }
+            return cursor.getLong(0);
         }
     }
 
