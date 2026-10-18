@@ -76,7 +76,7 @@ public final class WorkoutController {
         this.workout = workout;
         this.startInstant = startInstant;
         this.startElapsedRealtime = SystemClock.elapsedRealtime();
-        this.engine = new WorkoutEngine(workout.segments());
+        this.engine = new WorkoutEngine(workout);
         this.active = true;
         this.holdingFirstCue = false;
         this.pendingCue = null;
@@ -148,7 +148,7 @@ public final class WorkoutController {
         this.workout = stored;
         this.startInstant = now.minusMillis(elapsedMs);
         this.startElapsedRealtime = saved.startElapsedMs();
-        this.engine = new WorkoutEngine(stored.segments());
+        this.engine = new WorkoutEngine(stored);
         this.engine.resumeAt(Duration.ofMillis(elapsedMs));
         this.active = true;
         this.holdingFirstCue = false;
@@ -230,6 +230,8 @@ public final class WorkoutController {
                 snapshot.runCount(),
                 snapshot.walkNumber(),
                 snapshot.walkCount(),
+                snapshot.round(),
+                snapshot.roundCount(),
                 snapshot.finished()
         ));
     }

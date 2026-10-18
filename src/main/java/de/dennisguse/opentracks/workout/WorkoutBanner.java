@@ -39,6 +39,9 @@ public final class WorkoutBanner {
         } else {
             head = context.getString(state.type().labelRes());
         }
+        if (state.roundCount() > 0) {
+            head = context.getString(R.string.workout_banner_round, head, state.round(), state.roundCount());
+        }
         return context.getString(
                 R.string.workout_banner_status,
                 head,

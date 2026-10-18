@@ -47,6 +47,10 @@ public final class WorkoutEngine {
             int runCount,
             int walkNumber,
             int walkCount,
+            /* Round of the current block step, 1-based; 0 outside a block. */
+            int round,
+            /* Rounds in the current block; 0 outside a block. */
+            int roundCount,
             boolean finished
     ) {
     }
@@ -54,6 +58,7 @@ public final class WorkoutEngine {
     public record Tick(List<ClosedSegment> closed, String cue, Snapshot snapshot) {
     }
 
+    private final List<PlannedStep> plan;
     private final List<WorkoutSegment> segments;
     private final WorkoutTimeline timeline;
     private int nextToClose;
@@ -65,8 +70,21 @@ public final class WorkoutEngine {
     /** Smallest countdown mark already spoken in the current segment. */
     private int countdownAnnounced = Integer.MAX_VALUE;
 
+    /** Plain segments with no repeat blocks, so no round cues. */
     public WorkoutEngine(List<WorkoutSegment> segments) {
+        this.plan = PlannedStep.ofSegments(segments);
         this.segments = List.copyOf(segments);
+        this.timeline = new WorkoutTimeline(this.segments);
+    }
+
+    /** Expands the workout's repeat blocks into rounds; the first run of each round announces the round. */
+    public WorkoutEngine(Workout workout) {
+        this.plan = workout.plannedSteps();
+        List<WorkoutSegment> expanded = new ArrayList<>();
+        for (PlannedStep step : plan) {
+            expanded.add(step.segment());
+        }
+        this.segments = List.copyOf(expanded);
         this.timeline = new WorkoutTimeline(this.segments);
     }
 
@@ -80,7 +98,7 @@ public final class WorkoutEngine {
         int runCount = countWhere(type -> type.isRun());
         int walkCount = countWhere(SegmentType::isWalkInterval);
         if (finished || timeline.indexAt(safe) >= count) {
-            return new Snapshot(count, count, null, Duration.ZERO, timeline.total(), timeline.total(), runCount, runCount, walkCount, walkCount, true);
+            return new Snapshot(count, count, null, Duration.ZERO, timeline.total(), timeline.total(), runCount, runCount, walkCount, walkCount, 0, 0, true);
         }
         int index = timeline.indexAt(safe);
         Duration remaining = timeline.endOffset(index).minus(safe);
@@ -98,6 +116,8 @@ public final class WorkoutEngine {
                 runCount,
                 countUntil(index, SegmentType::isWalkInterval),
                 walkCount,
+                plan.get(index).round(),
+                plan.get(index).roundCount(),
                 false
         );
     }
@@ -131,7 +151,7 @@ public final class WorkoutEngine {
             boolean entered = index != announcedIndex && index >= 0 && index < count;
             StringBuilder spoken = new StringBuilder();
             if (entered) {
-                spoken.append(WorkoutSpeech.intervalCue(segments.get(index).type(), segmentLength(index)));
+                spoken.append(WorkoutSpeech.stepCue(plan.get(index), segmentLength(index)));
                 announcedIndex = index;
                 countdownAnnounced = Integer.MAX_VALUE;
             }

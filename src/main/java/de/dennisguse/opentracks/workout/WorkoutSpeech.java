@@ -33,6 +33,27 @@ public final class WorkoutSpeech {
         return length + " " + name;
     }
 
+    /**
+     * Interval cue for a planned step. On the first run of a block round it adds the round:
+     * "1 minute run, round 2", and on the last round "1 minute run, round 6, final round".
+     */
+    public static String stepCue(PlannedStep step, Duration duration) {
+        String cue = intervalCue(step.segment().type(), duration);
+        if (!step.announceRound()) {
+            return cue;
+        }
+        return cue + ", " + roundPhrase(step.round(), step.roundCount());
+    }
+
+    /** "round 2", or "round 6, final round" when it is the last round. */
+    public static String roundPhrase(int round, int roundCount) {
+        String phrase = "round " + round;
+        if (round == roundCount) {
+            phrase += ", final round";
+        }
+        return phrase;
+    }
+
     /** Minutes and seconds, with a zero part left off. "minute" and "second" stay singular. */
     public static String spokenLength(Duration duration) {
         long total = duration == null ? 0 : Math.max(0, duration.getSeconds());

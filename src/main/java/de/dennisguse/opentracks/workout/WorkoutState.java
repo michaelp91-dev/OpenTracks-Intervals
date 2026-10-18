@@ -29,6 +29,8 @@ public record WorkoutState(
         int runCount,
         int walkNumber,
         int walkCount,
+        int round,
+        int roundCount,
         boolean finished
 ) {
 }

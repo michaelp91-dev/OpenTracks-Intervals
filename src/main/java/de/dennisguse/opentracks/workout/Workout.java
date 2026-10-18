@@ -16,21 +16,63 @@
 package de.dennisguse.opentracks.workout;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
-public record Workout(long id, String name, boolean builtin, List<WorkoutSegment> segments) {
+/**
+ * A workout is an ordered list of items: single segments and repeat blocks.
+ * {@link #segments()} and {@link #plannedSteps()} give the expanded, playable order.
+ */
+public record Workout(long id, String name, boolean builtin, List<WorkoutItem> items) {
 
     public Workout {
         if (name == null) {
             name = "";
         }
-        segments = List.copyOf(segments);
+        items = List.copyOf(items);
+    }
+
+    /** A workout made only of single segments, as all workouts were before repeat blocks. */
+    public static Workout ofSegments(long id, String name, boolean builtin, List<WorkoutSegment> segments) {
+        return new Workout(id, name, builtin, new ArrayList<>(segments));
+    }
+
+    /** Every timed segment in play order, with blocks expanded into their rounds. */
+    public List<WorkoutSegment> segments() {
+        List<WorkoutSegment> segments = new ArrayList<>();
+        for (PlannedStep step : plannedSteps()) {
+            segments.add(step.segment());
+        }
+        return List.copyOf(segments);
+    }
+
+    public List<PlannedStep> plannedSteps() {
+        return PlannedStep.expand(items);
+    }
+
+    /** Number of timed segments including every round. */
+    public int segmentCount() {
+        int count = 0;
+        for (WorkoutItem item : items) {
+            count += item.segmentCount();
+        }
+        return count;
+    }
+
+    public int blockCount() {
+        int count = 0;
+        for (WorkoutItem item : items) {
+            if (item instanceof WorkoutBlock) {
+                count++;
+            }
+        }
+        return count;
     }
 
     public Duration totalDuration() {
         Duration total = Duration.ZERO;
-        for (WorkoutSegment segment : segments) {
-            total = total.plus(segment.duration());
+        for (WorkoutItem item : items) {
+            total = total.plus(item.totalDuration());
         }
         return total;
     }

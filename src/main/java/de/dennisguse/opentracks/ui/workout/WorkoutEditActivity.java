@@ -16,7 +16,6 @@
 package de.dennisguse.opentracks.ui.workout;
 
 import android.os.Bundle;
-import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
@@ -30,15 +29,15 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 import de.dennisguse.opentracks.AbstractActivity;
 import de.dennisguse.opentracks.R;
-import de.dennisguse.opentracks.databinding.WorkoutAddRoundsBinding;
 import de.dennisguse.opentracks.databinding.WorkoutEditActivityBinding;
 import de.dennisguse.opentracks.workout.SegmentType;
 import de.dennisguse.opentracks.workout.Workout;
+import de.dennisguse.opentracks.workout.WorkoutBlock;
 import de.dennisguse.opentracks.workout.WorkoutFormat;
+import de.dennisguse.opentracks.workout.WorkoutItem;
 import de.dennisguse.opentracks.workout.WorkoutRepository;
 import de.dennisguse.opentracks.workout.WorkoutSegment;
 
@@ -51,6 +50,9 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
     private static final String STATE_NAME = "workout_name";
     private static final String STATE_TYPES = "workout_types";
     private static final String STATE_DURATIONS = "workout_durations";
+    /** Per flattened row: -1 for a single segment, otherwise the index of its block. */
+    private static final String STATE_BLOCK_IDS = "workout_block_ids";
+    private static final String STATE_BLOCK_ROUNDS = "workout_block_rounds";
 
     private WorkoutEditActivityBinding viewBinding;
     private WorkoutSegmentEditAdapter adapter;
@@ -74,15 +76,7 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
             workoutId = savedInstanceState.getLong(STATE_ID);
             builtin = savedInstanceState.getBoolean(STATE_BUILTIN);
             viewBinding.workoutName.setText(savedInstanceState.getString(STATE_NAME, ""));
-            String[] types = savedInstanceState.getStringArray(STATE_TYPES);
-            String[] durations = savedInstanceState.getStringArray(STATE_DURATIONS);
-            List<WorkoutSegmentEditAdapter.Draft> drafts = new ArrayList<>();
-            if (types != null && durations != null) {
-                for (int i = 0; i < types.length && i < durations.length; i++) {
-                    drafts.add(new WorkoutSegmentEditAdapter.Draft(SegmentType.fromDatabase(types[i]), durations[i]));
-                }
-            }
-            adapter.replace(drafts);
+            adapter.replace(restoreDrafts(savedInstanceState));
         } else if (getIntent().hasExtra(EXTRA_WORKOUT_ID)) {
             workoutId = getIntent().getLongExtra(EXTRA_WORKOUT_ID, 0);
             Workout workout = repository.getWorkout(workoutId);
@@ -93,11 +87,7 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
             }
             builtin = workout.builtin();
             viewBinding.workoutName.setText(workout.name());
-            List<WorkoutSegmentEditAdapter.Draft> drafts = new ArrayList<>();
-            for (WorkoutSegment segment : workout.segments()) {
-                drafts.add(new WorkoutSegmentEditAdapter.Draft(segment.type(), WorkoutFormat.minutesSeconds(segment.duration())));
-            }
-            adapter.replace(drafts);
+            adapter.replace(draftsFrom(workout));
         } else {
             workoutId = 0;
             builtin = false;
@@ -114,15 +104,84 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
         outState.putLong(STATE_ID, workoutId);
         outState.putBoolean(STATE_BUILTIN, builtin);
         outState.putString(STATE_NAME, text(viewBinding.workoutName));
-        List<WorkoutSegmentEditAdapter.Draft> drafts = adapter.drafts();
-        String[] types = new String[drafts.size()];
-        String[] durations = new String[drafts.size()];
-        for (int i = 0; i < drafts.size(); i++) {
-            types[i] = drafts.get(i).type.name();
-            durations[i] = drafts.get(i).durationText;
+        List<String> types = new ArrayList<>();
+        List<String> durations = new ArrayList<>();
+        List<Integer> blockIds = new ArrayList<>();
+        List<Integer> blockRounds = new ArrayList<>();
+        int blockId = 0;
+        for (WorkoutSegmentEditAdapter.Draft draft : adapter.drafts()) {
+            if (draft.isBlock()) {
+                for (WorkoutSegmentEditAdapter.Draft step : draft.steps) {
+                    types.add(step.type.name());
+                    durations.add(step.durationText);
+                    blockIds.add(blockId);
+                    blockRounds.add(draft.rounds);
+                }
+                blockId++;
+            } else {
+                types.add(draft.type.name());
+                durations.add(draft.durationText);
+                blockIds.add(-1);
+                blockRounds.add(0);
+            }
         }
-        outState.putStringArray(STATE_TYPES, types);
-        outState.putStringArray(STATE_DURATIONS, durations);
+        outState.putStringArray(STATE_TYPES, types.toArray(new String[0]));
+        outState.putStringArray(STATE_DURATIONS, durations.toArray(new String[0]));
+        outState.putIntArray(STATE_BLOCK_IDS, toIntArray(blockIds));
+        outState.putIntArray(STATE_BLOCK_ROUNDS, toIntArray(blockRounds));
+    }
+
+    private static List<WorkoutSegmentEditAdapter.Draft> restoreDrafts(Bundle state) {
+        String[] types = state.getStringArray(STATE_TYPES);
+        String[] durations = state.getStringArray(STATE_DURATIONS);
+        int[] blockIds = state.getIntArray(STATE_BLOCK_IDS);
+        int[] blockRounds = state.getIntArray(STATE_BLOCK_ROUNDS);
+        List<WorkoutSegmentEditAdapter.Draft> drafts = new ArrayList<>();
+        if (types == null || durations == null) {
+            return drafts;
+        }
+        int count = Math.min(types.length, durations.length);
+        int i = 0;
+        while (i < count) {
+            int blockId = blockIds != null && i < blockIds.length ? blockIds[i] : -1;
+            if (blockId < 0) {
+                drafts.add(new WorkoutSegmentEditAdapter.Draft(SegmentType.fromDatabase(types[i]), durations[i]));
+                i++;
+                continue;
+            }
+            int rounds = blockRounds != null && i < blockRounds.length ? blockRounds[i] : WorkoutBlock.MIN_ROUNDS;
+            List<WorkoutSegmentEditAdapter.Draft> steps = new ArrayList<>();
+            while (i < count && i < blockIds.length && blockIds[i] == blockId) {
+                steps.add(new WorkoutSegmentEditAdapter.Draft(SegmentType.fromDatabase(types[i]), durations[i]));
+                i++;
+            }
+            drafts.add(WorkoutSegmentEditAdapter.Draft.block(steps, Math.max(WorkoutBlock.MIN_ROUNDS, Math.min(WorkoutBlock.MAX_ROUNDS, rounds))));
+        }
+        return drafts;
+    }
+
+    private static int[] toIntArray(List<Integer> values) {
+        int[] array = new int[values.size()];
+        for (int i = 0; i < array.length; i++) {
+            array[i] = values.get(i);
+        }
+        return array;
+    }
+
+    private static List<WorkoutSegmentEditAdapter.Draft> draftsFrom(Workout workout) {
+        List<WorkoutSegmentEditAdapter.Draft> drafts = new ArrayList<>();
+        for (WorkoutItem item : workout.items()) {
+            if (item instanceof WorkoutBlock block) {
+                List<WorkoutSegmentEditAdapter.Draft> steps = new ArrayList<>();
+                for (WorkoutSegment step : block.steps()) {
+                    steps.add(new WorkoutSegmentEditAdapter.Draft(step.type(), WorkoutFormat.minutesSeconds(step.duration())));
+                }
+                drafts.add(WorkoutSegmentEditAdapter.Draft.block(steps, block.rounds()));
+            } else if (item instanceof WorkoutSegment segment) {
+                drafts.add(new WorkoutSegmentEditAdapter.Draft(segment.type(), WorkoutFormat.minutesSeconds(segment.duration())));
+            }
+        }
+        return drafts;
     }
 
     @NonNull
@@ -152,7 +211,7 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
             return true;
         }
         if (item.getItemId() == R.id.workout_edit_add_rounds) {
-            showAddRounds();
+            RoundsBlockDialog.show(this, null, this::addBlock);
             return true;
         }
         if (item.getItemId() == R.id.workout_edit_reset) {
@@ -160,11 +219,7 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
             Workout workout = repository.getWorkout(workoutId);
             if (workout != null) {
                 viewBinding.workoutName.setText(workout.name());
-                List<WorkoutSegmentEditAdapter.Draft> drafts = new ArrayList<>();
-                for (WorkoutSegment segment : workout.segments()) {
-                    drafts.add(new WorkoutSegmentEditAdapter.Draft(segment.type(), WorkoutFormat.minutesSeconds(segment.duration())));
-                }
-                adapter.replace(drafts);
+                adapter.replace(draftsFrom(workout));
             }
             return true;
         }
@@ -176,6 +231,19 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
         List<WorkoutSegmentEditAdapter.Draft> drafts = adapter.drafts();
         drafts.add(to, drafts.remove(from));
         adapter.notifyItemRangeChanged(Math.min(from, to), 2);
+    }
+
+    @Override
+    public void onEditBlock(int position) {
+        WorkoutSegmentEditAdapter.Draft block = adapter.drafts().get(position);
+        RoundsBlockDialog.show(this, block, edited -> {
+            int index = adapter.drafts().indexOf(block);
+            if (index < 0) {
+                return;
+            }
+            adapter.drafts().set(index, edited);
+            adapter.notifyItemChanged(index);
+        });
     }
 
     @Override
@@ -199,59 +267,56 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
             Toast.makeText(this, R.string.workout_need_segment, Toast.LENGTH_LONG).show();
             return;
         }
-        List<WorkoutSegment> segments = new ArrayList<>();
+        List<WorkoutItem> items = new ArrayList<>();
         for (WorkoutSegmentEditAdapter.Draft draft : drafts) {
-            Duration duration = WorkoutFormat.parseMinutesSeconds(draft.durationText);
-            if (duration == null || duration.isZero() || duration.isNegative()) {
-                Toast.makeText(this, R.string.workout_need_duration, Toast.LENGTH_LONG).show();
-                return;
+            if (draft.isBlock()) {
+                if (draft.steps.isEmpty()) {
+                    Toast.makeText(this, R.string.workout_rounds_need_step, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                List<WorkoutSegment> steps = new ArrayList<>();
+                for (WorkoutSegmentEditAdapter.Draft step : draft.steps) {
+                    WorkoutSegment segment = segment(step);
+                    if (segment == null) {
+                        return;
+                    }
+                    steps.add(segment);
+                }
+                if (draft.rounds < WorkoutBlock.MIN_ROUNDS || draft.rounds > WorkoutBlock.MAX_ROUNDS) {
+                    Toast.makeText(this, R.string.workout_rounds_invalid, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                items.add(new WorkoutBlock(steps, draft.rounds));
+            } else {
+                WorkoutSegment segment = segment(draft);
+                if (segment == null) {
+                    return;
+                }
+                items.add(segment);
             }
-            segments.add(new WorkoutSegment(draft.type, duration));
         }
-        repository.saveWorkout(new Workout(workoutId, name, builtin, segments));
+        repository.saveWorkout(new Workout(workoutId, name, builtin, items));
         finish();
     }
 
-    private void showAddRounds() {
-        WorkoutAddRoundsBinding dialogBinding = WorkoutAddRoundsBinding.inflate(LayoutInflater.from(this));
-        dialogBinding.roundsCount.setText(String.format(Locale.US, "%d", 8));
-        dialogBinding.roundsRunSeconds.setText(String.format(Locale.US, "%d", 60));
-        dialogBinding.roundsWalkSeconds.setText(String.format(Locale.US, "%d", 90));
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.workout_rounds_title)
-                .setView(dialogBinding.getRoot())
-                .setPositiveButton(android.R.string.ok, (dialog, which) -> addRounds(dialogBinding))
-                .setNegativeButton(android.R.string.cancel, null)
-                .show();
-    }
-
-    private void addRounds(WorkoutAddRoundsBinding dialogBinding) {
-        Integer rounds = positiveInt(dialogBinding.roundsCount);
-        Integer runSeconds = positiveInt(dialogBinding.roundsRunSeconds);
-        Integer walkSeconds = positiveInt(dialogBinding.roundsWalkSeconds);
-        if (rounds == null || runSeconds == null || walkSeconds == null || rounds > 100) {
-            Toast.makeText(this, R.string.workout_rounds_invalid, Toast.LENGTH_LONG).show();
-            return;
-        }
-        int start = adapter.drafts().size();
-        for (int i = 0; i < rounds; i++) {
-            adapter.drafts().add(new WorkoutSegmentEditAdapter.Draft(SegmentType.RUN, WorkoutFormat.minutesSeconds(Duration.ofSeconds(runSeconds))));
-            adapter.drafts().add(new WorkoutSegmentEditAdapter.Draft(SegmentType.WALK, WorkoutFormat.minutesSeconds(Duration.ofSeconds(walkSeconds))));
-        }
-        adapter.notifyItemRangeInserted(start, rounds * 2);
-        if (start > 0) {
-            adapter.notifyItemChanged(start - 1);
-        }
-        viewBinding.workoutSegments.smoothScrollToPosition(adapter.drafts().size() - 1);
-    }
-
-    private static Integer positiveInt(EditText editText) {
-        try {
-            int value = Integer.parseInt(text(editText).trim());
-            return value > 0 ? value : null;
-        } catch (NumberFormatException e) {
+    /** Null (after a message) when the duration is not valid. */
+    private WorkoutSegment segment(WorkoutSegmentEditAdapter.Draft draft) {
+        Duration duration = WorkoutFormat.parseMinutesSeconds(draft.durationText);
+        if (duration == null || duration.isZero() || duration.isNegative()) {
+            Toast.makeText(this, R.string.workout_need_duration, Toast.LENGTH_LONG).show();
             return null;
         }
+        return new WorkoutSegment(draft.type, duration);
+    }
+
+    private void addBlock(WorkoutSegmentEditAdapter.Draft block) {
+        int position = adapter.drafts().size();
+        adapter.drafts().add(block);
+        adapter.notifyItemInserted(position);
+        if (position > 0) {
+            adapter.notifyItemChanged(position - 1);
+        }
+        viewBinding.workoutSegments.smoothScrollToPosition(position);
     }
 
     private static String text(EditText editText) {

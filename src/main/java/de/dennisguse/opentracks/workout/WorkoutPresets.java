@@ -35,6 +35,6 @@ public final class WorkoutPresets {
             segments.add(new WorkoutSegment(SegmentType.WALK, Duration.ofSeconds(90)));
         }
         segments.add(new WorkoutSegment(SegmentType.COOLDOWN, Duration.ofMinutes(5)));
-        return new Workout(0, C25K_WEEK1_NAME, true, segments);
+        return Workout.ofSegments(0, C25K_WEEK1_NAME, true, segments);
     }
 }

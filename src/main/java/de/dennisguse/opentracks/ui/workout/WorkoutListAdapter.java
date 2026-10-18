@@ -85,7 +85,7 @@ public class WorkoutListAdapter extends RecyclerView.Adapter<WorkoutListAdapter.
         }
 
         void bind(Workout workout) {
-            int count = workout.segments().size();
+            int count = workout.segmentCount();
             String time = WorkoutFormat.minutesSeconds(workout.totalDuration());
             binding.workoutItemName.setText(workout.name());
             binding.workoutItemSummary.setText(binding.getRoot().getContext().getResources()

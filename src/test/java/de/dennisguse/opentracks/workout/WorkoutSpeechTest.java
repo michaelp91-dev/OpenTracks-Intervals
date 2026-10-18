@@ -36,4 +36,20 @@ public class WorkoutSpeechTest {
         assertEquals("45 second cool-down walk", WorkoutSpeech.intervalCue(SegmentType.COOLDOWN, Duration.ofSeconds(45)));
         assertEquals("2 minute run", WorkoutSpeech.intervalCue(SegmentType.RUN, Duration.ofMinutes(2)));
     }
+
+    @Test
+    public void stepCue_addsRoundOnlyWhenMarked() {
+        WorkoutSegment run = new WorkoutSegment(SegmentType.RUN, Duration.ofMinutes(1));
+        assertEquals("1 minute run", WorkoutSpeech.stepCue(new PlannedStep(run, 0, 0, false), run.duration()));
+        assertEquals("1 minute run", WorkoutSpeech.stepCue(new PlannedStep(run, 2, 6, false), run.duration()));
+        assertEquals("1 minute run, round 1", WorkoutSpeech.stepCue(new PlannedStep(run, 1, 6, true), run.duration()));
+        assertEquals("1 minute run, round 5", WorkoutSpeech.stepCue(new PlannedStep(run, 5, 6, true), run.duration()));
+        assertEquals("1 minute run, round 6, final round", WorkoutSpeech.stepCue(new PlannedStep(run, 6, 6, true), run.duration()));
+    }
+
+    @Test
+    public void roundPhrase() {
+        assertEquals("round 2", WorkoutSpeech.roundPhrase(2, 3));
+        assertEquals("round 3, final round", WorkoutSpeech.roundPhrase(3, 3));
+    }
 }

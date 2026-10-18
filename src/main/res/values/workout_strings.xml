@@ -49,10 +49,21 @@ limitations under the License.
     <string name="workout_move_down" translatable="false">Move down</string>
     <string name="workout_delete_segment" translatable="false">Delete segment</string>
     <string name="workout_rounds_title" translatable="false">Add rounds</string>
+    <string name="workout_rounds_edit_title" translatable="false">Edit rounds</string>
     <string name="workout_rounds_count" translatable="false">Rounds</string>
-    <string name="workout_rounds_run_seconds" translatable="false">Run seconds</string>
-    <string name="workout_rounds_walk_seconds" translatable="false">Walk seconds</string>
-    <string name="workout_rounds_invalid" translatable="false">Enter rounds, run seconds, and walk seconds, each greater than 0</string>
+    <string name="workout_rounds_steps" translatable="false">Steps in each round</string>
+    <string name="workout_rounds_add_step" translatable="false">Add step</string>
+    <string name="workout_rounds_fewer" translatable="false">One round less</string>
+    <string name="workout_rounds_more" translatable="false">One round more</string>
+    <string name="workout_rounds_minus_label" translatable="false">−</string>
+    <string name="workout_rounds_plus_label" translatable="false">+</string>
+    <string name="workout_rounds_invalid" translatable="false">Enter 1 to 99 rounds</string>
+    <string name="workout_rounds_need_step" translatable="false">Add at least one step</string>
+    <string name="workout_block_title" translatable="false">Repeat %1$d×</string>
+    <string name="workout_block_summary" translatable="false">%1$s per round · %2$s total</string>
+    <string name="workout_block_edit" translatable="false">Edit rounds</string>
+    <string name="workout_delete_block" translatable="false">Delete rounds block</string>
+    <string name="workout_banner_round" translatable="false">%1$s · Round %2$d/%3$d</string>
     <string name="workout_cue_complete" translatable="false">Workout complete</string>
     <string name="workout_banner_run" translatable="false">RUN %1$d/%2$d</string>
     <string name="workout_banner_walk" translatable="false">WALK %1$d/%2$d</string>

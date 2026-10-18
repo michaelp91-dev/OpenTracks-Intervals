@@ -17,7 +17,7 @@ package de.dennisguse.opentracks.workout;
 
 import java.time.Duration;
 
-public record WorkoutSegment(SegmentType type, Duration duration) {
+public record WorkoutSegment(SegmentType type, Duration duration) implements WorkoutItem {
     public WorkoutSegment {
         if (type == null) {
             throw new IllegalArgumentException("type");
@@ -25,5 +25,15 @@ public record WorkoutSegment(SegmentType type, Duration duration) {
         if (duration == null || duration.isNegative()) {
             throw new IllegalArgumentException("duration");
         }
+    }
+
+    @Override
+    public Duration totalDuration() {
+        return duration;
+    }
+
+    @Override
+    public int segmentCount() {
+        return 1;
     }
 }

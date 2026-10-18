@@ -20,13 +20,16 @@ import android.content.Context;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 
+import java.util.List;
+
 /**
  * Separate from upstream {@code database.db} so track migrations stay untouched.
  */
 public final class WorkoutDatabase extends SQLiteOpenHelper {
 
     static final String NAME = "workouts.db";
-    private static final int VERSION = 2;
+    /** 2: sensor file table. 3: repeat blocks ({@code block_id}, {@code block_rounds} on segments). */
+    private static final int VERSION = 3;
 
     static final String TABLE_WORKOUTS = "workouts";
     static final String TABLE_SEGMENTS = "workout_segments";
@@ -67,7 +70,9 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
                 + "workout_id INTEGER NOT NULL REFERENCES " + TABLE_WORKOUTS + "(_id) ON DELETE CASCADE,"
                 + "position INTEGER NOT NULL,"
                 + "type TEXT NOT NULL CHECK(type IN ('WARMUP','RUN','WALK','COOLDOWN')),"
-                + "duration_s INTEGER NOT NULL)");
+                + "duration_s INTEGER NOT NULL,"
+                + "block_id INTEGER,"
+                + "block_rounds INTEGER)");
         db.execSQL("CREATE TABLE " + TABLE_TRACK_SEGMENTS + " ("
                 + "_id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 + "track_id INTEGER NOT NULL,"
@@ -87,6 +92,11 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
         if (oldVersion < 2) {
             db.execSQL(CREATE_SENSOR_FILES);
         }
+        if (oldVersion < 3) {
+            // Existing rows get NULL, which means a single segment, so saved workouts play exactly as before.
+            db.execSQL("ALTER TABLE " + TABLE_SEGMENTS + " ADD COLUMN block_id INTEGER");
+            db.execSQL("ALTER TABLE " + TABLE_SEGMENTS + " ADD COLUMN block_rounds INTEGER");
+        }
     }
 
     private static void seed(SQLiteDatabase db) {
@@ -95,13 +105,24 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
         values.put("name", preset.name());
         values.put("builtin", 1);
         long id = db.insertOrThrow(TABLE_WORKOUTS, null, values);
+        insertItems(db, id, preset.items());
+    }
+
+    static void insertItems(SQLiteDatabase db, long workoutId, List<WorkoutItem> items) {
         int position = 0;
-        for (WorkoutSegment segment : preset.segments()) {
+        for (WorkoutRows.Row row : WorkoutRows.toRows(items)) {
             ContentValues segmentValues = new ContentValues();
-            segmentValues.put("workout_id", id);
+            segmentValues.put("workout_id", workoutId);
             segmentValues.put("position", position++);
-            segmentValues.put("type", segment.type().name());
-            segmentValues.put("duration_s", segment.duration().getSeconds());
+            segmentValues.put("type", row.type().name());
+            segmentValues.put("duration_s", row.durationSeconds());
+            if (row.blockId() == null) {
+                segmentValues.putNull("block_id");
+                segmentValues.putNull("block_rounds");
+            } else {
+                segmentValues.put("block_id", row.blockId());
+                segmentValues.put("block_rounds", row.blockRounds());
+            }
             db.insertOrThrow(TABLE_SEGMENTS, null, segmentValues);
         }
     }

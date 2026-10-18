@@ -160,4 +160,93 @@ public class WorkoutEngineTest {
                 new WorkoutSegment(SegmentType.WALK, Duration.ofSeconds(20))
         );
     }
+
+    private static List<String> cuesAtSegmentStarts(WorkoutEngine engine, List<WorkoutSegment> segments) {
+        WorkoutTimeline timeline = new WorkoutTimeline(segments);
+        List<String> cues = new ArrayList<>();
+        for (int i = 0; i < timeline.size(); i++) {
+            cues.add(engine.onElapsed(timeline.startOffset(i)).cue());
+        }
+        cues.add(engine.onElapsed(timeline.total()).cue());
+        return cues;
+    }
+
+    @Test
+    public void block_announcesRoundOnFirstRunAndFinalRound() {
+        Workout workout = WorkoutBlockTest.example();
+        WorkoutEngine engine = new WorkoutEngine(workout);
+
+        List<String> cues = cuesAtSegmentStarts(engine, workout.segments());
+
+        // Total 28:00, halfway 14:00 falls inside round 2's 2 minute run (13:00-15:00) and is said at the next start.
+        assertEquals(List.of(
+                "5 minute warm-up walk",
+                "1 minute run, round 1",
+                "1 minute walk",
+                "2 minute run",
+                "2 minute walk",
+                "1 minute run, round 2",
+                "1 minute walk",
+                "2 minute run",
+                "2 minute walk. Halfway point.",
+                "1 minute run, round 3, final round",
+                "1 minute walk",
+                "2 minute run",
+                "2 minute walk",
+                "5 minute cool-down walk",
+                "Workout complete"
+        ), cues);
+    }
+
+    @Test
+    public void block_roundCueMergesWithHalfway() {
+        Workout workout = new Workout(0, "w", false, List.of(
+                new WorkoutBlock(List.of(WorkoutBlockTest.run(60), WorkoutBlockTest.walk(60)), 2)
+        ));
+        WorkoutEngine engine = new WorkoutEngine(workout);
+
+        assertEquals("1 minute run, round 1", engine.onElapsed(Duration.ZERO).cue());
+        assertEquals("1 minute walk", engine.onElapsed(Duration.ofSeconds(60)).cue());
+        assertEquals("1 minute run, round 2, final round. Halfway point.", engine.onElapsed(Duration.ofSeconds(120)).cue());
+    }
+
+    @Test
+    public void flatWorkout_cuesHaveNoRoundText() {
+        Workout preset = WorkoutPresets.c25kWeek1();
+        for (String cue : cuesAtSegmentStarts(new WorkoutEngine(preset), preset.segments())) {
+            assertFalse(cue, cue.contains("round"));
+        }
+    }
+
+    @Test
+    public void snapshot_reportsRoundOfBlockSteps() {
+        Workout workout = WorkoutBlockTest.example();
+        WorkoutEngine engine = new WorkoutEngine(workout);
+
+        WorkoutEngine.Snapshot warmup = engine.snapshot(Duration.ofMinutes(1));
+        assertEquals(0, warmup.round());
+        assertEquals(0, warmup.roundCount());
+
+        // 5:00 warm-up + one 6:00 round + 1:30 into round 2 (its 1 minute walk)
+        WorkoutEngine.Snapshot inRoundTwo = engine.snapshot(Duration.ofSeconds(300 + 360 + 90));
+        assertEquals(SegmentType.WALK, inRoundTwo.type());
+        assertEquals(2, inRoundTwo.round());
+        assertEquals(3, inRoundTwo.roundCount());
+        assertEquals(14, inRoundTwo.segmentCount());
+        assertEquals(Duration.ofMinutes(28), inRoundTwo.total());
+
+        WorkoutEngine.Snapshot cooldown = engine.snapshot(Duration.ofMinutes(25));
+        assertEquals(SegmentType.COOLDOWN, cooldown.type());
+        assertEquals(0, cooldown.roundCount());
+    }
+
+    @Test
+    public void resume_doesNotRepeatRoundCue() {
+        Workout workout = WorkoutBlockTest.example();
+        WorkoutEngine engine = new WorkoutEngine(workout);
+
+        engine.resumeAt(Duration.ofSeconds(300 + 360 + 5));
+        assertNull(engine.onElapsed(Duration.ofSeconds(300 + 360 + 6)).cue());
+        assertEquals("1 minute walk", engine.onElapsed(Duration.ofSeconds(300 + 360 + 60)).cue());
+    }
 }

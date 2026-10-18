@@ -21,7 +21,6 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.util.Log;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -73,7 +72,7 @@ public final class WorkoutRepository {
             }
             String name = cursor.getString(1);
             boolean builtin = cursor.getInt(2) != 0;
-            return new Workout(cursor.getLong(0), name, builtin, loadSegments(db, id));
+            return new Workout(cursor.getLong(0), name, builtin, loadItems(db, id));
         }
     }
 
@@ -97,15 +96,7 @@ public final class WorkoutRepository {
                 db.update(WorkoutDatabase.TABLE_WORKOUTS, values, "_id=?", new String[]{Long.toString(id)});
                 db.delete(WorkoutDatabase.TABLE_SEGMENTS, "workout_id=?", new String[]{Long.toString(id)});
             }
-            int position = 0;
-            for (WorkoutSegment segment : workout.segments()) {
-                ContentValues segmentValues = new ContentValues();
-                segmentValues.put("workout_id", id);
-                segmentValues.put("position", position++);
-                segmentValues.put("type", segment.type().name());
-                segmentValues.put("duration_s", segment.duration().getSeconds());
-                db.insertOrThrow(WorkoutDatabase.TABLE_SEGMENTS, null, segmentValues);
-            }
+            WorkoutDatabase.insertItems(db, id, workout.items());
             db.setTransactionSuccessful();
             return id;
         } finally {
@@ -129,7 +120,7 @@ public final class WorkoutRepository {
             return;
         }
         Workout preset = WorkoutPresets.c25kWeek1();
-        saveWorkout(new Workout(id, preset.name(), true, preset.segments()));
+        saveWorkout(new Workout(id, preset.name(), true, preset.items()));
     }
 
     public synchronized void insertTrackSegment(Track.Id trackId, String workoutName, int position, SegmentType type, Instant start, Instant end, boolean completed) {
@@ -228,23 +219,25 @@ public final class WorkoutRepository {
         helper.getWritableDatabase().delete(WorkoutDatabase.TABLE_TRACK_SEGMENTS, null, null);
     }
 
-    private static List<WorkoutSegment> loadSegments(SQLiteDatabase db, long workoutId) {
-        List<WorkoutSegment> segments = new ArrayList<>();
+    private static List<WorkoutItem> loadItems(SQLiteDatabase db, long workoutId) {
+        List<WorkoutRows.Row> rows = new ArrayList<>();
         try (Cursor cursor = db.query(
                 WorkoutDatabase.TABLE_SEGMENTS,
-                new String[]{"type", "duration_s"},
+                new String[]{"type", "duration_s", "block_id", "block_rounds"},
                 "workout_id=?",
                 new String[]{Long.toString(workoutId)},
                 null,
                 null,
                 "position ASC, _id ASC")) {
             while (cursor.moveToNext()) {
-                segments.add(new WorkoutSegment(
+                rows.add(new WorkoutRows.Row(
                         SegmentType.fromDatabase(cursor.getString(0)),
-                        Duration.ofSeconds(cursor.getLong(1))
+                        cursor.getLong(1),
+                        cursor.isNull(2) ? null : cursor.getInt(2),
+                        cursor.isNull(3) ? null : cursor.getInt(3)
                 ));
             }
         }
-        return segments;
+        return WorkoutRows.fromRows(rows);
     }
 }
