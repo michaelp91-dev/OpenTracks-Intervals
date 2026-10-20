@@ -353,6 +353,16 @@ public class PreferencesUtils {
         return getBoolean(R.string.workout_auto_stop_key, DEFAULT);
     }
 
+    /** Intervals: heart-rate switch on the start screen. Off means no HR sensor scan, connection, or data. */
+    public static boolean isHeartRateEnabled() {
+        final boolean DEFAULT = resources.getBoolean(R.bool.heart_rate_enabled_default);
+        return getBoolean(R.string.heart_rate_enabled_key, DEFAULT);
+    }
+
+    public static void setHeartRateEnabled(boolean enabled) {
+        setBoolean(R.string.heart_rate_enabled_key, enabled);
+    }
+
     public static boolean shouldRecordSensorData() {
         final boolean DEFAULT = resources.getBoolean(R.bool.record_sensor_data_default);
         return getBoolean(R.string.record_sensor_data_key, DEFAULT);

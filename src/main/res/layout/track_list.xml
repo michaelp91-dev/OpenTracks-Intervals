@@ -56,19 +56,17 @@ limitations under the License.
                 android:textAppearance="?attr/textAppearanceLabelLarge"
                 app:drawableEndCompat="@drawable/status_dot" />
 
-            <TextView
-                android:id="@+id/status_light_hr"
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/status_switch_hr"
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
-                android:background="?attr/selectableItemBackground"
-                android:contentDescription="Heart rate status"
-                android:drawablePadding="6dp"
-                android:gravity="center_vertical"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:text="HR"
-                android:textAppearance="?attr/textAppearanceLabelLarge"
-                app:drawableEndCompat="@drawable/status_dot" />
+                android:layout_marginStart="8dp"
+                android:contentDescription="Heart rate on or off"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                android:switchPadding="8dp"
+                android:text="HR off"
+                android:textAppearance="?attr/textAppearanceLabelLarge" />
 
             <TextView
                 android:id="@+id/status_battery_hr"

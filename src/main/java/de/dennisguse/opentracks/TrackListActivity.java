@@ -159,7 +159,7 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
         hrMonitor.getState().observe(this, state -> updateHrLight());
         hrMonitor.getHeartRate().observe(this, bpm -> updateHrLight());
         hrMonitor.getBattery().observe(this, pct -> updateHrLight());
-        viewBinding.statusBatteryHr.setOnClickListener(v -> onHrLightTapped());
+        viewBinding.statusBatteryHr.setOnClickListener(v -> showHrDetail());
         viewBinding.statusLightGps.setOnClickListener(v -> onGpsLightTapped());
         viewBinding.statusLightGps.setOnLongClickListener(v -> {
             if (!recordingStatus.isRecording() && gpsStatusValue.isGpsStarted()) {
@@ -170,7 +170,12 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
             }
             return false;
         });
-        viewBinding.statusLightHr.setOnClickListener(v -> onHrLightTapped());
+        viewBinding.statusSwitchHr.setChecked(hrMonitor.isEnabled());
+        viewBinding.statusSwitchHr.setOnCheckedChangeListener((button, checked) -> onHrSwitchChanged(checked));
+        viewBinding.statusSwitchHr.setOnLongClickListener(v -> {
+            onHrSwitchLongPressed();
+            return true;
+        });
         updateGpsLight();
         updateHrLight();
 
@@ -236,7 +241,7 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
             // Permissions just granted: kick off the GPS and WHOOP connections.
             gpsAutoStartAttempted = false;
             if (recordingStatusConnection != null) autoStartGps();
-            if (hrMonitor != null) hrMonitor.connect();
+            if (hrMonitor != null && hrMonitor.isEnabled()) hrMonitor.connect();
         }, (requester) -> {
             // Activity recognition is only for the step sensors. Denying it must not block a recording.
             if (!PermissionRequester.RECORDING.hasPermission(this) || !PermissionRequester.NOTIFICATION.hasPermission(this)) {
@@ -403,7 +408,6 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
     private WhoopHeartRateMonitor hrMonitor;
     private boolean gpsAutoStartAttempted = false;
     private boolean gpsStartRequested = false;
-    private boolean showLiveHeartRate = false;
 
     private boolean isGpsProviderEnabled() {
         LocationManager locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
@@ -487,42 +491,70 @@ public class TrackListActivity extends AbstractTrackDeleteActivity implements Co
         tintLight(viewBinding.statusLightGps, gpsColor());
     }
 
-    private void onHrLightTapped() {
-        WhoopHeartRateMonitor.State state = hrMonitor.getState().getValue();
-        if (state == WhoopHeartRateMonitor.State.RED) {
-            if (!PermissionRequester.BLUETOOTH.hasPermission(this)) {
-                openAppPermissionSettings();
-                return;
-            }
-            Toast.makeText(this, "Retrying WHOOP… (" + hrMonitor.getDetail().getValue() + ")", Toast.LENGTH_LONG).show();
-            hrMonitor.connect();
-        } else if (state == WhoopHeartRateMonitor.State.GREEN) {
-            showLiveHeartRate = !showLiveHeartRate;
+    private void onHrSwitchChanged(boolean checked) {
+        if (checked == hrMonitor.isEnabled()) {
             updateHrLight();
-        } else {
-            Toast.makeText(this, hrMonitor.getDetail().getValue(), Toast.LENGTH_SHORT).show();
+            return;
         }
+        if (checked && !PermissionRequester.BLUETOOTH.hasPermission(this)) {
+            viewBinding.statusSwitchHr.setChecked(false);
+            openAppPermissionSettings();
+            return;
+        }
+        // Persisted; the recording's HR sensor follows it too (SensorManager reconnects/disconnects).
+        hrMonitor.setEnabled(checked);
+        updateHrLight();
     }
 
+    private void showHrDetail() {
+        Toast.makeText(this, hrMonitor.getDetail().getValue(), Toast.LENGTH_SHORT).show();
+    }
+
+    /** Long-press: status detail, and the option to forget the saved strap (e.g. after getting a new one). */
+    private void onHrSwitchLongPressed() {
+        String saved = hrMonitor.getSavedAddress();
+        androidx.appcompat.app.AlertDialog.Builder builder = new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Heart rate")
+                .setMessage(hrMonitor.getDetail().getValue() + (saved != null ? "\n\nSaved strap: " + saved : "\n\nNo strap saved yet"))
+                .setPositiveButton(android.R.string.ok, null);
+        if (saved != null) {
+            builder.setNeutralButton("Forget strap", (d, w) -> hrMonitor.forgetStrap());
+        }
+        builder.show();
+    }
+
+    /** Switch label: off, connecting, connected with live bpm, or not connected. No value unless connected. */
     private void updateHrLight() {
         if (viewBinding == null || hrMonitor == null) return;
+        boolean enabled = hrMonitor.isEnabled();
+        if (viewBinding.statusSwitchHr.isChecked() != enabled) viewBinding.statusSwitchHr.setChecked(enabled);
         WhoopHeartRateMonitor.State state = hrMonitor.getState().getValue();
         Integer bpm = hrMonitor.getHeartRate().getValue();
-        int color = state == WhoopHeartRateMonitor.State.GREEN ? COLOR_GREEN : state == WhoopHeartRateMonitor.State.YELLOW ? COLOR_YELLOW : COLOR_RED;
-        tintLight(viewBinding.statusLightHr, color);
         Integer battery = hrMonitor.getBattery().getValue();
-        if (state == WhoopHeartRateMonitor.State.GREEN && battery != null) {
+        boolean connected = enabled && state == WhoopHeartRateMonitor.State.GREEN;
+        String label;
+        int color;
+        if (!enabled) {
+            label = "HR off";
+            color = viewBinding.statusLightGps.getCurrentTextColor();
+        } else if (connected) {
+            label = bpm != null ? "HR \u2665 " + bpm : "HR connected";
+            color = COLOR_GREEN;
+        } else if (state == WhoopHeartRateMonitor.State.YELLOW) {
+            label = "HR connecting\u2026";
+            color = viewBinding.statusLightGps.getCurrentTextColor();
+        } else {
+            label = "HR not connected";
+            color = COLOR_RED;
+        }
+        viewBinding.statusSwitchHr.setText(label);
+        viewBinding.statusSwitchHr.setTextColor(color);
+        if (connected && battery != null) {
             viewBinding.statusBatteryHr.setVisibility(android.view.View.VISIBLE);
             viewBinding.statusBatteryHr.setText(battery + "%");
-            if (battery < 20) viewBinding.statusBatteryHr.setTextColor(COLOR_RED);
-            else viewBinding.statusBatteryHr.setTextColor(viewBinding.statusLightHr.getCurrentTextColor());
+            viewBinding.statusBatteryHr.setTextColor(battery < 20 ? COLOR_RED : viewBinding.statusLightGps.getCurrentTextColor());
         } else {
             viewBinding.statusBatteryHr.setVisibility(android.view.View.GONE);
-        }
-        if (showLiveHeartRate && state == WhoopHeartRateMonitor.State.GREEN && bpm != null) {
-            viewBinding.statusLightHr.setText("\u2665 " + bpm + " bpm");
-        } else {
-            viewBinding.statusLightHr.setText("HR");
         }
     }
 

@@ -67,4 +67,30 @@ public class WhoopHeartRateMonitorTest {
         assertEquals("142 beats per minute. WHOOP battery low, 15 percent", WhoopHeartRateMonitor.heartRateAnnouncement(142, 1000, 15));
         assertEquals("142 beats per minute", WhoopHeartRateMonitor.heartRateAnnouncement(142, 1000, 50));
     }
+
+    @Test
+    public void scan_withSavedStrap_ignoresOtherWhoops() {
+        String mine = "AA:BB:CC:DD:EE:01";
+        // A coworker's strap: WHOOP name and WHOOP service, different address.
+        org.junit.Assert.assertFalse(WhoopHeartRateMonitor.acceptsScanResult(mine, "AA:BB:CC:DD:EE:99", "WHOOP 4C0123", true));
+        org.junit.Assert.assertFalse(WhoopHeartRateMonitor.acceptsScanResult(mine, "AA:BB:CC:DD:EE:99", null, true));
+        org.junit.Assert.assertTrue(WhoopHeartRateMonitor.acceptsScanResult(mine, "aa:bb:cc:dd:ee:01", null, false));
+        org.junit.Assert.assertFalse(WhoopHeartRateMonitor.acceptsScanResult(mine, null, "WHOOP", true));
+    }
+
+    @Test
+    public void scan_withoutSavedStrap_acceptsFirstWhoop() {
+        org.junit.Assert.assertTrue(WhoopHeartRateMonitor.acceptsScanResult(null, "AA:BB:CC:DD:EE:01", "WHOOP 4C0123", false));
+        org.junit.Assert.assertTrue(WhoopHeartRateMonitor.acceptsScanResult(null, "AA:BB:CC:DD:EE:01", null, true));
+        org.junit.Assert.assertFalse(WhoopHeartRateMonitor.acceptsScanResult(null, "AA:BB:CC:DD:EE:01", "Polar H10", false));
+    }
+
+    @Test
+    public void bonded_withSavedStrap_onlyThatAddress() {
+        String mine = "AA:BB:CC:DD:EE:01";
+        org.junit.Assert.assertFalse(WhoopHeartRateMonitor.acceptsBonded(mine, "AA:BB:CC:DD:EE:02", "WHOOP old"));
+        org.junit.Assert.assertTrue(WhoopHeartRateMonitor.acceptsBonded(mine, mine, "WHOOP"));
+        org.junit.Assert.assertTrue(WhoopHeartRateMonitor.acceptsBonded(null, "AA:BB:CC:DD:EE:02", "WHOOP old"));
+        org.junit.Assert.assertFalse(WhoopHeartRateMonitor.acceptsBonded(null, "AA:BB:CC:DD:EE:02", "Pixel Buds"));
+    }
 }

@@ -103,6 +103,25 @@ public class WhoopHeartRateMonitor {
         return address.equalsIgnoreCase(saved);
     }
 
+    /**
+     * Whether a scan result may be connected to. Once a strap has been saved, only that strap
+     * (same address, or a device bonded to this phone that is that address) is accepted; any other
+     * WHOOP-named or WHOOP-service device nearby (a coworker's strap) is ignored. With nothing saved
+     * yet, the first WHOOP is accepted so a new strap can be found.
+     */
+    static boolean acceptsScanResult(@Nullable String savedAddress, @Nullable String address, @Nullable String name, boolean advertisesWhoopService) {
+        if (address == null) return false;
+        if (savedAddress != null) return savedAddress.equalsIgnoreCase(address);
+        return isWhoopName(name) || advertisesWhoopService;
+    }
+
+    /** Bonded devices: with a saved strap only that address; otherwise the first bonded WHOOP. */
+    static boolean acceptsBonded(@Nullable String savedAddress, @Nullable String address, @Nullable String name) {
+        if (address == null) return false;
+        if (savedAddress != null) return savedAddress.equalsIgnoreCase(address);
+        return isWhoopName(name);
+    }
+
     static boolean isWhoopName(@Nullable String name) {
         return name != null && name.toUpperCase(Locale.US).startsWith("WHOOP");
     }
@@ -178,11 +197,42 @@ public class WhoopHeartRateMonitor {
     public void addListener(HeartRateListener l) { listeners.add(l); }
     public void removeListener(HeartRateListener l) { listeners.remove(l); }
 
+    /** Heart-rate switch on the start screen (persisted, default off). */
+    public boolean isEnabled() {
+        return PreferencesUtils.isHeartRateEnabled();
+    }
+
+    /**
+     * Turns HR on or off. Off: stops any scan/connection and clears the value. On: connects if someone
+     * holds the monitor. The recording's HR sensor follows the same setting via SensorManager.
+     */
+    public void setEnabled(boolean enabled) {
+        PreferencesUtils.setHeartRateEnabled(enabled);
+        handler.post(() -> {
+            if (!enabled) {
+                stopAll("Heart rate off");
+            } else if (!holders.isEmpty() && !connected && !inProgress) {
+                start();
+            }
+        });
+    }
+
+    /** Drops the saved strap so the next connection picks up the first WHOOP found. */
+    public void forgetStrap() {
+        prefs.edit().remove(KEY_ADDRESS).apply();
+        if (isEnabled()) connect();
+    }
+
+    @Nullable
+    public String getSavedAddress() {
+        return prefs.getString(KEY_ADDRESS, null);
+    }
+
     /** Someone (start screen, recording) wants HR. Connects if not already connected/connecting. */
     public void acquire(Object holder) {
         handler.post(() -> {
             holders.add(holder);
-            if (!connected && !inProgress) start();
+            if (!connected && !inProgress && isEnabled()) start();
         });
     }
 
@@ -200,16 +250,24 @@ public class WhoopHeartRateMonitor {
     }
 
     public void disconnect() {
-        handler.post(() -> {
-            inProgress = false;
-            connected = false;
-            closeInternal();
-            heartRate.postValue(null);
-            setState(State.RED, "Not connected");
-        });
+        handler.post(() -> stopAll("Not connected"));
+    }
+
+    private void stopAll(String why) {
+        inProgress = false;
+        connected = false;
+        closeInternal();
+        heartRate.postValue(null);
+        battery.postValue(null);
+        lastHrMs = 0;
+        setState(State.RED, why);
     }
 
     private void start() {
+        if (!isEnabled()) {
+            stopAll("Heart rate off");
+            return;
+        }
         closeInternal();
         connected = false;
         inProgress = true;
@@ -236,13 +294,10 @@ public class WhoopHeartRateMonitor {
         }
         if (bonded == null) return null;
         String saved = prefs.getString(KEY_ADDRESS, null);
-        BluetoothDevice found = null;
         for (BluetoothDevice d : bonded) {
-            if (!isWhoopName(d.getName())) continue;
-            if (d.getAddress().equalsIgnoreCase(saved)) return d;
-            if (found == null) found = d;
+            if (acceptsBonded(saved, d.getAddress(), d.getName())) return d;
         }
-        return found;
+        return null;
     }
 
     @SuppressLint("MissingPermission")
@@ -286,8 +341,7 @@ public class WhoopHeartRateMonitor {
                 if (name == null) name = device.getName();
                 boolean whoopService = result.getScanRecord() != null && result.getScanRecord().getServiceUuids() != null
                         && result.getScanRecord().getServiceUuids().contains(new ParcelUuid(WHOOP_SERVICE));
-                boolean savedMatch = saved != null && saved.equalsIgnoreCase(device.getAddress());
-                if (isWhoopName(name) || whoopService || savedMatch) {
+                if (acceptsScanResult(saved, device.getAddress(), name, whoopService)) {
                     handler.post(() -> {
                         if (scanCallback != this) return;
                         Log.i(TAG, "Found " + device.getAddress());
@@ -386,7 +440,8 @@ public class WhoopHeartRateMonitor {
         connected = false;
         closeInternal();
         heartRate.postValue(null);
-        if (holders.isEmpty()) {
+        lastHrMs = 0;
+        if (holders.isEmpty() || !isEnabled()) {
             setState(State.RED, "Disconnected: " + why);
             return;
         }
@@ -399,6 +454,10 @@ public class WhoopHeartRateMonitor {
     }
 
     private void onHeartRateValue(int bpm) {
+        if (!isEnabled()) {
+            stopAll("Heart rate off");
+            return;
+        }
         cancelTimeout();
         handler.removeCallbacks(dataTimeout);
         handler.postDelayed(dataTimeout, DATA_TIMEOUT_MS);
@@ -408,7 +467,9 @@ public class WhoopHeartRateMonitor {
             step = "streaming";
             handler.removeCallbacks(batteryRefresh);
             handler.postDelayed(batteryRefresh, BATTERY_REFRESH_MS);
-            if (currentDevice != null) {
+            String saved = prefs.getString(KEY_ADDRESS, null);
+            if (currentDevice != null && (saved == null || saved.equalsIgnoreCase(currentDevice.getAddress()))) {
+                // Only the first strap is adopted; a different device never replaces the saved one.
                 String address = currentDevice.getAddress();
                 prefs.edit().putString(KEY_ADDRESS, address).apply();
                 // Recording HR sensor = this strap; HeartRateHandler routes it through this monitor.

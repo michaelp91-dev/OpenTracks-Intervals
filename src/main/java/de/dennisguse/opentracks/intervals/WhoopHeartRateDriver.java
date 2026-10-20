@@ -6,6 +6,7 @@ import android.os.Handler;
 import de.dennisguse.opentracks.data.models.HeartRate;
 import de.dennisguse.opentracks.sensors.driver.Driver;
 import de.dennisguse.opentracks.sensors.driver.DriverObserver;
+import de.dennisguse.opentracks.settings.PreferencesUtils;
 
 /**
  * Recording HR driver for the WHOOP: takes HR from {@link WhoopHeartRateMonitor} (the single GATT
@@ -36,7 +37,7 @@ public class WhoopHeartRateDriver implements Driver, WhoopHeartRateMonitor.Heart
 
     @Override
     public void onHeartRate(int bpm, String deviceName, String addr) {
-        if (!active || handler == null) return;
+        if (!active || handler == null || !PreferencesUtils.isHeartRateEnabled()) return;
         handler.post(() -> {
             if (!active) return;
             if (!connected) {

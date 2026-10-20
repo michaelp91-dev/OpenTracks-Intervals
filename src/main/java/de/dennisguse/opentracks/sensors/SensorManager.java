@@ -12,6 +12,7 @@ import androidx.annotation.VisibleForTesting;
 
 import java.time.Instant;
 
+import de.dennisguse.opentracks.R;
 import de.dennisguse.opentracks.data.models.Cadence;
 import de.dennisguse.opentracks.data.models.Distance;
 import de.dennisguse.opentracks.data.models.Position;
@@ -148,7 +149,8 @@ public class SensorManager implements SharedPreferences.OnSharedPreferenceChange
             altitudeChangeHandler.connect();
         }
 
-        if (PreferencesUtils.isKey(heartRateHandler.getSensorPreferenceKey(), key)) {
+        if (PreferencesUtils.isKey(heartRateHandler.getSensorPreferenceKey(), key)
+                || PreferencesUtils.isKey(R.string.heart_rate_enabled_key, key)) {
             heartRateHandler.connect();
         }
 

@@ -8,11 +8,23 @@ import de.dennisguse.opentracks.sensors.driver.BluetoothDriver;
 import de.dennisguse.opentracks.sensors.driver.Driver;
 import de.dennisguse.opentracks.sensors.driver.HeartRateBluetooth;
 import de.dennisguse.opentracks.sensors.sensorData.AggregatorHeartRate;
+import de.dennisguse.opentracks.settings.PreferencesUtils;
 
 public class HeartRateHandler extends SensorHandler<HeartRate, HeartRate> {
 
     protected HeartRateHandler(SensorManager sensorManager) {
         super(sensorManager);
+    }
+
+    /** Intervals: with the heart-rate switch off, no driver is created, so nothing scans, connects, or records HR. */
+    @Override
+    void connect() {
+        if (!PreferencesUtils.isHeartRateEnabled()) {
+            disconnect();
+            onDisconnected();
+            return;
+        }
+        super.connect();
     }
 
     @NonNull
