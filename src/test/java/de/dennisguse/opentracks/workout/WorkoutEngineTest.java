@@ -249,4 +249,111 @@ public class WorkoutEngineTest {
         assertNull(engine.onElapsed(Duration.ofSeconds(300 + 360 + 6)).cue());
         assertEquals("1 minute walk", engine.onElapsed(Duration.ofSeconds(300 + 360 + 60)).cue());
     }
+
+    @Test
+    public void intervalHalfway_atExactMidpointOfRunsAndWalks() {
+        WorkoutEngine engine = new WorkoutEngine(List.of(
+                new WorkoutSegment(SegmentType.RUN, Duration.ofMinutes(2)),
+                new WorkoutSegment(SegmentType.WALK, Duration.ofMinutes(15)),
+                new WorkoutSegment(SegmentType.RUN, Duration.ofMinutes(2))
+        ));
+        assertEquals("2 minute run", engine.onElapsed(Duration.ZERO).cue());
+        assertNull(engine.onElapsed(Duration.ofMillis(59_999)).cue());
+        assertEquals("Halfway", engine.onElapsed(Duration.ofSeconds(60)).cue());
+        assertNull(engine.onElapsed(Duration.ofSeconds(61)).cue());
+
+        assertEquals("15 minute walk", engine.onElapsed(Duration.ofSeconds(120)).cue());
+        // Walk midpoint 7:30 in = 9:30 into the workout, which is also the workout midpoint (19:00 / 2).
+        assertNull(engine.onElapsed(Duration.ofSeconds(120 + 449)).cue());
+        assertEquals("Halfway point", engine.onElapsed(Duration.ofSeconds(120 + 450)).cue());
+        assertNull(engine.onElapsed(Duration.ofSeconds(120 + 451)).cue());
+    }
+
+    @Test
+    public void intervalHalfway_oddSecondsUseHalfSecond() {
+        WorkoutEngine engine = new WorkoutEngine(List.of(
+                new WorkoutSegment(SegmentType.WARMUP, Duration.ofMinutes(5)),
+                new WorkoutSegment(SegmentType.RUN, Duration.ofSeconds(45)),
+                new WorkoutSegment(SegmentType.WALK, Duration.ofMinutes(30))
+        ));
+        engine.onElapsed(Duration.ZERO);
+        engine.onElapsed(Duration.ofSeconds(300));
+        assertEquals("30 seconds", engine.onElapsed(Duration.ofSeconds(316)).cue());
+        assertNull(engine.onElapsed(Duration.ofSeconds(322)).cue());
+        assertEquals("Halfway", engine.onElapsed(Duration.ofMillis(322_500)).cue());
+    }
+
+    @Test
+    public void intervalHalfway_mergesWithThirtySecondMarkOnOneMinuteInterval() {
+        WorkoutEngine engine = new WorkoutEngine(List.of(
+                new WorkoutSegment(SegmentType.WARMUP, Duration.ofMinutes(5)),
+                new WorkoutSegment(SegmentType.RUN, Duration.ofMinutes(1)),
+                new WorkoutSegment(SegmentType.WALK, Duration.ofMinutes(30))
+        ));
+        engine.onElapsed(Duration.ZERO);
+        engine.onElapsed(Duration.ofSeconds(300));
+        assertEquals("Halfway. 30 seconds.", engine.onElapsed(Duration.ofSeconds(330)).cue());
+    }
+
+    @Test
+    public void intervalHalfway_skippedBelowTwentySeconds() {
+        WorkoutEngine engine = new WorkoutEngine(List.of(
+                new WorkoutSegment(SegmentType.WARMUP, Duration.ofMinutes(5)),
+                new WorkoutSegment(SegmentType.RUN, Duration.ofSeconds(19)),
+                new WorkoutSegment(SegmentType.WALK, Duration.ofMinutes(30))
+        ));
+        engine.onElapsed(Duration.ZERO);
+        engine.onElapsed(Duration.ofSeconds(300));
+        for (int ms = 300_500; ms < 319_000; ms += 500) {
+            String cue = engine.onElapsed(Duration.ofMillis(ms)).cue();
+            assertFalse(String.valueOf(cue), cue != null && cue.contains("Halfway"));
+        }
+    }
+
+    @Test
+    public void intervalHalfway_keepsRoundCues() {
+        Workout workout = new Workout(0, "w", false, List.of(
+                new WorkoutSegment(SegmentType.WARMUP, Duration.ofMinutes(5)),
+                new WorkoutBlock(List.of(WorkoutBlockTest.run(60), WorkoutBlockTest.walk(60)), 2),
+                new WorkoutSegment(SegmentType.COOLDOWN, Duration.ofMinutes(30))
+        ));
+        WorkoutEngine engine = new WorkoutEngine(workout);
+        engine.onElapsed(Duration.ZERO);
+        engine.onElapsed(Duration.ofSeconds(150));
+        assertEquals("1 minute run, round 1", engine.onElapsed(Duration.ofSeconds(300)).cue());
+        assertEquals("Halfway. 30 seconds.", engine.onElapsed(Duration.ofSeconds(330)).cue());
+        assertEquals("1 minute walk", engine.onElapsed(Duration.ofSeconds(360)).cue());
+        assertEquals("1 minute run, round 2, final round", engine.onElapsed(Duration.ofSeconds(420)).cue());
+        WorkoutEngine.Snapshot snapshot = engine.snapshot(Duration.ofSeconds(450));
+        assertEquals(2, snapshot.round());
+        assertEquals(2, snapshot.roundCount());
+    }
+
+    @Test
+    public void intervalHalfway_resumeBeforeMidpointStillSpeaksAfterMidpointDoesNot() {
+        List<WorkoutSegment> plan = List.of(
+                new WorkoutSegment(SegmentType.WARMUP, Duration.ofMinutes(5)),
+                new WorkoutSegment(SegmentType.RUN, Duration.ofMinutes(2)),
+                new WorkoutSegment(SegmentType.WALK, Duration.ofMinutes(10))
+        );
+        WorkoutEngine before = new WorkoutEngine(plan);
+        before.resumeAt(Duration.ofSeconds(330));
+        assertEquals("Halfway", before.onElapsed(Duration.ofSeconds(360)).cue());
+
+        WorkoutEngine after = new WorkoutEngine(plan);
+        after.resumeAt(Duration.ofSeconds(361));
+        assertNull(after.onElapsed(Duration.ofSeconds(362)).cue());
+    }
+
+    @Test
+    public void intervalHalfway_lateTickIntoSegmentPastMidpointSaysOnlyStartCue() {
+        WorkoutEngine engine = new WorkoutEngine(List.of(
+                new WorkoutSegment(SegmentType.WARMUP, Duration.ofMinutes(5)),
+                new WorkoutSegment(SegmentType.RUN, Duration.ofMinutes(2)),
+                new WorkoutSegment(SegmentType.WALK, Duration.ofMinutes(30))
+        ));
+        engine.onElapsed(Duration.ZERO);
+        assertEquals("2 minute run", engine.onElapsed(Duration.ofSeconds(361)).cue());
+        assertNull(engine.onElapsed(Duration.ofSeconds(362)).cue());
+    }
 }

@@ -29,6 +29,10 @@ public final class WorkoutEngine {
     public static final String COMPLETE_CUE = "Workout complete";
     public static final String THIRTY_SECONDS_CUE = "30 seconds";
     public static final String TEN_SECONDS_CUE = "10 seconds";
+    /** Midpoint of the current interval. Workout-level midpoint stays {@link #HALFWAY_CUE}. */
+    public static final String INTERVAL_HALFWAY_CUE = "Halfway";
+    /** Intervals shorter than this get no interval halfway cue (it would crowd the start cue and countdown). */
+    static final long INTERVAL_HALFWAY_MIN_MS = 20_000L;
 
     /** Spoken once per segment: 30 (only if the segment is longer), then 10, 5, 4, 3, 2, 1. */
     private static final int[] COUNTDOWN_MARKS = {30, 10, 5, 4, 3, 2, 1};
@@ -64,6 +68,8 @@ public final class WorkoutEngine {
     private int nextToClose;
     private int announcedIndex = -1;
     private boolean halfwayAnnounced;
+    /** Interval halfway already spoken (or skipped) for the current segment. */
+    private boolean intervalHalfwayDone;
     private boolean completeAnnounced;
     private boolean finished;
     private boolean stopped;
@@ -154,10 +160,19 @@ public final class WorkoutEngine {
                 spoken.append(WorkoutSpeech.stepCue(plan.get(index), segmentLength(index)));
                 announcedIndex = index;
                 countdownAnnounced = Integer.MAX_VALUE;
+                // A late tick that lands past the midpoint does not say "Halfway" on top of the start cue.
+                intervalHalfwayDone = !intervalHalfwayApplies(index) || safe.compareTo(intervalHalfway(index)) >= 0;
             }
             if (crossedHalfway) {
                 appendPhrase(spoken, HALFWAY_CUE);
                 halfwayAnnounced = true;
+            }
+            if (!intervalHalfwayDone && safe.compareTo(intervalHalfway(index)) >= 0) {
+                // When the workout's "Halfway point" is said on this tick, a second "Halfway" adds nothing.
+                if (!crossedHalfway) {
+                    appendPhrase(spoken, INTERVAL_HALFWAY_CUE);
+                }
+                intervalHalfwayDone = true;
             }
             int mark = takeCountdown(timeline.endOffset(index).minus(safe), segmentLength(index));
             if (mark > 0) {
@@ -223,6 +238,7 @@ public final class WorkoutEngine {
         finished = false;
         stopped = false;
         countdownAnnounced = Integer.MAX_VALUE;
+        intervalHalfwayDone = !intervalHalfwayApplies(index) || safe.compareTo(intervalHalfway(index)) >= 0;
         Duration remaining = timeline.endOffset(index).minus(safe);
         long remainingMs = Math.max(0, remaining.toMillis());
         long lengthMs = segmentLength(index).toMillis();
@@ -231,6 +247,15 @@ public final class WorkoutEngine {
                 countdownAnnounced = mark;
             }
         }
+    }
+
+    /** Exact midpoint offset of an interval, to the millisecond (7:30 into a 15:00 walk, 22.5 s into a 45 s run). */
+    private Duration intervalHalfway(int index) {
+        return timeline.startOffset(index).plus(segmentLength(index).dividedBy(2));
+    }
+
+    private boolean intervalHalfwayApplies(int index) {
+        return segmentLength(index).toMillis() >= INTERVAL_HALFWAY_MIN_MS;
     }
 
     private Duration segmentLength(int index) {
