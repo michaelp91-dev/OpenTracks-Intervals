@@ -121,8 +121,13 @@ public class WorkoutListAdapter extends RecyclerView.Adapter<WorkoutListAdapter.
             int count = workout.segmentCount();
             String time = WorkoutFormat.minutesSeconds(workout.totalDuration());
             binding.workoutItemName.setText(workout.name());
-            binding.workoutItemSummary.setText(binding.getRoot().getContext().getResources()
-                    .getQuantityString(R.plurals.workout_list_summary, count, count, time));
+            if (workout.isDistance()) {
+                binding.workoutItemSummary.setText(binding.getRoot().getContext().getString(R.string.workout_distance_summary,
+                        de.dennisguse.opentracks.workout.DistancePace.shortDistance(workout.distanceMeters())));
+            } else {
+                binding.workoutItemSummary.setText(binding.getRoot().getContext().getResources()
+                        .getQuantityString(R.plurals.workout_list_summary, count, count, time));
+            }
             binding.getRoot().setOnClickListener(v -> listener.onStart(workout));
             binding.getRoot().setOnLongClickListener(v -> {
                 showMenu(v, workout);

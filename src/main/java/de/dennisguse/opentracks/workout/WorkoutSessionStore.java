@@ -28,7 +28,32 @@ public final class WorkoutSessionStore {
     private static final String START_EPOCH_MS = "start_epoch_ms";
     private static final String START_ELAPSED_MS = "start_elapsed_ms";
 
+    private static final String PACE_WORKOUT_ID = "pace_workout_id";
+    private static final String PACE_GOAL_S = "pace_goal_s";
+    private static final String PACE_EVERY_M = "pace_every_m";
+
     private final SharedPreferences preferences;
+
+    /**
+     * Pace choice for the next start of a distance workout. goalSeconds 0 means no pace.
+     * Kept with the session so a restart keeps the same plan; cleared with it.
+     */
+    @SuppressLint("ApplySharedPref")
+    public void savePace(long workoutId, long goalSeconds, int everyMeters) {
+        preferences.edit()
+                .putLong(PACE_WORKOUT_ID, workoutId)
+                .putLong(PACE_GOAL_S, goalSeconds)
+                .putInt(PACE_EVERY_M, everyMeters)
+                .commit();
+    }
+
+    /** @return {goalSeconds, everyMeters} for this workout, or null when none was chosen */
+    public long[] loadPace(long workoutId) {
+        if (preferences.getLong(PACE_WORKOUT_ID, -1) != workoutId || preferences.getLong(PACE_GOAL_S, 0) <= 0) {
+            return null;
+        }
+        return new long[]{preferences.getLong(PACE_GOAL_S, 0), preferences.getInt(PACE_EVERY_M, 0)};
+    }
 
     public WorkoutSessionStore(Context context) {
         preferences = context.getApplicationContext().getSharedPreferences(PREF, Context.MODE_PRIVATE);

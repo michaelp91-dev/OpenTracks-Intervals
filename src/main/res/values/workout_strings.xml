@@ -66,6 +66,20 @@ limitations under the License.
     <string name="workout_delete_block" translatable="false">Delete rounds block</string>
     <string name="workout_banner_round" translatable="false">%1$s · Round %2$d/%3$d</string>
     <string name="workout_cue_complete" translatable="false">Workout complete</string>
+    <string name="workout_distance_hint" translatable="false">Distance goal (optional)</string>
+    <string name="workout_distance_helper" translatable="false">e.g. 5k, 15 km, 5000 m. Leave blank for a timed interval workout.</string>
+    <string name="workout_distance_invalid" translatable="false">Enter a distance like 5k, 15 km or 5000 m</string>
+    <string name="workout_distance_summary" translatable="false">Distance · %1$s</string>
+    <string name="workout_pace_question" translatable="false">Set a pace?</string>
+    <string name="workout_pace_yes" translatable="false">Yes</string>
+    <string name="workout_pace_no" translatable="false">No</string>
+    <string name="workout_pace_question_message" translatable="false">%1$s. With a pace you hear how far ahead or behind you are at each update distance.</string>
+    <string name="workout_pace_goal_title" translatable="false">Goal finish time</string>
+    <string name="workout_pace_goal_hint" translatable="false">mm:ss or h:mm:ss, e.g. 30:00</string>
+    <string name="workout_pace_goal_invalid" translatable="false">Enter a time like 30:00 or 1:05:00</string>
+    <string name="workout_pace_every_title" translatable="false">Update every (meters)</string>
+    <string name="workout_pace_every_hint" translatable="false">e.g. 1000, 2500, 5000 (max %1$d)</string>
+    <string name="workout_pace_every_invalid" translatable="false">Enter meters above 0 and at most %1$d</string>
     <string name="workout_banner_run" translatable="false">RUN %1$d/%2$d</string>
     <string name="workout_banner_walk" translatable="false">WALK %1$d/%2$d</string>
     <string name="workout_banner_status" translatable="false">%1$s · %2$s left · %3$s / %4$s</string>

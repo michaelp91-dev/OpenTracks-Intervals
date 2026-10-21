@@ -50,6 +50,11 @@ public final class WorkoutController {
     private boolean holdingFirstCue;
     private String pendingCue;
     private long holdStartedElapsed;
+    /** Set instead of {@link #engine} for a distance workout. */
+    private DistancePace.Tracker distance;
+    private boolean distanceSkipPending;
+    private double lastDistanceM;
+    private boolean distanceSegmentWritten;
 
     public WorkoutController(CuePlayer cuePlayer, WorkoutRepository repository, Supplier<Instant> nowSupplier, WorkoutSessionStore sessionStore, BooleanSupplier ttsReady) {
         this.cuePlayer = cuePlayer;
@@ -76,11 +81,19 @@ public final class WorkoutController {
         this.workout = workout;
         this.startInstant = startInstant;
         this.startElapsedRealtime = SystemClock.elapsedRealtime();
-        this.engine = new WorkoutEngine(workout);
         this.active = true;
         this.holdingFirstCue = false;
         this.pendingCue = null;
         sessionStore.save(trackId.id(), workout.id(), startInstant.toEpochMilli(), startElapsedRealtime);
+        if (workout.isDistance()) {
+            startDistance(workout, false);
+            holdFirstCue(distanceStartCue());
+            publish(Duration.ZERO);
+            Log.i(TAG, "Started distance workout \"" + workout.name() + "\" " + workout.distanceMeters() + " m on track " + trackId.id());
+            return;
+        }
+        this.distance = null;
+        this.engine = new WorkoutEngine(workout);
 
         WorkoutEngine.Tick tick = engine.onElapsed(Duration.ZERO);
         writeClosed(tick.closed(), startInstant);
@@ -90,6 +103,15 @@ public final class WorkoutController {
     }
 
     public void onTick() {
+        onTick(null);
+    }
+
+    /** @param distanceM recorded track distance in meters, or null when unknown */
+    public void onTick(Double distanceM) {
+        if (active && distance != null) {
+            onDistanceTick(distanceM);
+            return;
+        }
         if (!active || engine == null) {
             return;
         }
@@ -107,6 +129,17 @@ public final class WorkoutController {
     }
 
     public void stop(Instant now) {
+        if (active && distance != null) {
+            holdingFirstCue = false;
+            pendingCue = null;
+            writeDistanceSegment(now, false);
+            active = false;
+            distance = null;
+            sessionStore.clear();
+            state.setValue(null);
+            Log.i(TAG, "Stopped distance workout on track " + (trackId == null ? "?" : trackId.id()));
+            return;
+        }
         if (!active || engine == null) {
             return;
         }
@@ -135,6 +168,21 @@ public final class WorkoutController {
             return;
         }
         Workout stored = repository.getWorkout(saved.workoutId());
+        if (stored != null && stored.isDistance()) {
+            long elapsedMs = Math.max(0, SystemClock.elapsedRealtime() - saved.startElapsedMs());
+            this.trackId = trackId;
+            this.workout = stored;
+            this.startInstant = nowSupplier.get().minusMillis(elapsedMs);
+            this.startElapsedRealtime = saved.startElapsedMs();
+            this.engine = null;
+            this.active = true;
+            this.holdingFirstCue = false;
+            this.pendingCue = null;
+            startDistance(stored, true);
+            publish(Duration.ofMillis(elapsedMs));
+            Log.i(TAG, "Resumed distance workout \"" + stored.name() + "\" at " + elapsedMs + " ms");
+            return;
+        }
         if (stored == null || stored.segments().isEmpty()) {
             sessionStore.clear();
             return;
@@ -148,6 +196,7 @@ public final class WorkoutController {
         this.workout = stored;
         this.startInstant = now.minusMillis(elapsedMs);
         this.startElapsedRealtime = saved.startElapsedMs();
+        this.distance = null;
         this.engine = new WorkoutEngine(stored);
         this.engine.resumeAt(Duration.ofMillis(elapsedMs));
         this.active = true;
@@ -155,6 +204,59 @@ public final class WorkoutController {
         this.pendingCue = null;
         publish(Duration.ofMillis(elapsedMs));
         Log.i(TAG, "Resumed \"" + stored.name() + "\" at " + elapsedMs + " ms (stored start epoch " + saved.startEpochMs() + ")");
+    }
+
+    private void startDistance(Workout workout, boolean resumed) {
+        long[] pace = sessionStore.loadPace(workout.id());
+        Duration goal = pace == null ? null : Duration.ofSeconds(pace[0]);
+        Integer every = pace == null || pace[1] <= 0 ? null : (int) pace[1];
+        this.engine = null;
+        this.distance = new DistancePace.Tracker(workout.distanceMeters(), goal, every);
+        this.distanceSkipPending = resumed;
+        this.lastDistanceM = 0;
+        this.distanceSegmentWritten = false;
+        Log.i(TAG, "Distance plan " + workout.distanceMeters() + " m, goal " + goal + ", cues at " + distance.points());
+    }
+
+    private String distanceStartCue() {
+        String cue = DistancePace.spokenDistance(workout.distanceMeters());
+        long[] pace = sessionStore.loadPace(workout.id());
+        if (pace != null) {
+            cue += ", goal " + DistancePace.spokenClock(Duration.ofSeconds(pace[0]));
+        }
+        return cue;
+    }
+
+    private void onDistanceTick(Double distanceM) {
+        Duration elapsed = elapsed();
+        if (distanceM != null && !distance.isFinished()) {
+            lastDistanceM = Math.max(lastDistanceM, distanceM);
+            if (distanceSkipPending) {
+                distanceSkipPending = false;
+                distance.skipTo(lastDistanceM, elapsed);
+            } else {
+                speak(distance.onProgress(lastDistanceM, elapsed));
+            }
+            if (distance.isFinished()) {
+                writeDistanceSegment(nowSupplier.get(), true);
+                sessionStore.clear();
+            }
+        }
+        flushFirstCue();
+        publish(elapsed);
+    }
+
+    /** One RUN row so the recorded track shows the workout name and its time in the run summary. */
+    private void writeDistanceSegment(Instant now, boolean completed) {
+        if (distanceSegmentWritten || trackId == null || workout == null || startInstant == null) {
+            return;
+        }
+        distanceSegmentWritten = true;
+        Instant end = completed && distance.finishTime() != null ? startInstant.plus(distance.finishTime()) : now;
+        if (end.isBefore(startInstant)) {
+            end = startInstant;
+        }
+        repository.insertTrackSegment(trackId, workout.name(), 0, SegmentType.RUN, startInstant, end, completed);
     }
 
     private void holdFirstCue(String cue) {
@@ -213,6 +315,16 @@ public final class WorkoutController {
     }
 
     private void publish(Duration elapsed) {
+        if (active && distance != null && workout != null) {
+            boolean done = distance.isFinished();
+            Duration shown = done && distance.finishTime() != null ? distance.finishTime() : elapsed;
+            String status = DistancePace.shortDistance(workout.distanceMeters())
+                    + (done ? " done" : " · " + DistancePace.formatKm((int) Math.round(Math.min(lastDistanceM, workout.distanceMeters()))) + " km")
+                    + " · " + WorkoutFormat.minutesSeconds(shown);
+            state.setValue(new WorkoutState(workout.name(), 0, 0, null, Duration.ZERO, shown, Duration.ZERO,
+                    0, 0, 0, 0, 0, 0, done, status));
+            return;
+        }
         if (!active || engine == null || workout == null) {
             state.setValue(null);
             return;

@@ -31,8 +31,9 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
     /**
      * 2: sensor file table. 3: repeat blocks ({@code block_id}, {@code block_rounds} on segments).
      * 4: user order of the Workouts list ({@code sort_order} on workouts).
+     * 5: distance workouts ({@code distance_m} on workouts, 0 = timed).
      */
-    private static final int VERSION = 4;
+    private static final int VERSION = 5;
 
     static final String TABLE_WORKOUTS = "workouts";
     static final String TABLE_SEGMENTS = "workout_segments";
@@ -68,7 +69,8 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
                 + "_id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 + "name TEXT NOT NULL,"
                 + "builtin INTEGER NOT NULL DEFAULT 0,"
-                + "sort_order INTEGER NOT NULL DEFAULT 0)");
+                + "sort_order INTEGER NOT NULL DEFAULT 0,"
+                + "distance_m INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE TABLE " + TABLE_SEGMENTS + " ("
                 + "_id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 + "workout_id INTEGER NOT NULL REFERENCES " + TABLE_WORKOUTS + "(_id) ON DELETE CASCADE,"
@@ -104,6 +106,10 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
         if (oldVersion < 4) {
             db.execSQL("ALTER TABLE " + TABLE_WORKOUTS + " ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0");
             db.execSQL(WorkoutOrder.MIGRATE_SQL);
+        }
+        if (oldVersion < 5) {
+            // Existing workouts get 0 = timed, so they play exactly as before.
+            db.execSQL("ALTER TABLE " + TABLE_WORKOUTS + " ADD COLUMN distance_m INTEGER NOT NULL DEFAULT 0");
         }
     }
 

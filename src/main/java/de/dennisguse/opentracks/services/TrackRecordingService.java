@@ -653,7 +653,9 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         RecordingData data = trackRecordingManager.getDataForUI();
 
         if (workoutController != null && workoutController.isActive()) {
-            workoutController.onTick();
+            Double distanceM = data != null && data.track() != null && data.trackStatistics() != null
+                    ? data.trackStatistics().totalDistance().toM() : null;
+            workoutController.onTick(distanceM);
             WorkoutState workoutState = workoutController.currentState();
             if (notificationManager != null && workoutState != null) {
                 notificationManager.setWorkoutStatus(WorkoutBanner.format(this, workoutState));

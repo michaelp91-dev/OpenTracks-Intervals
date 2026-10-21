@@ -33,6 +33,7 @@ import java.util.List;
 import de.dennisguse.opentracks.AbstractActivity;
 import de.dennisguse.opentracks.R;
 import de.dennisguse.opentracks.databinding.WorkoutEditActivityBinding;
+import de.dennisguse.opentracks.workout.DistancePace;
 import de.dennisguse.opentracks.workout.SegmentType;
 import de.dennisguse.opentracks.workout.Workout;
 import de.dennisguse.opentracks.workout.WorkoutBlock;
@@ -48,6 +49,7 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
     private static final String STATE_ID = "workout_id";
     private static final String STATE_BUILTIN = "workout_builtin";
     private static final String STATE_NAME = "workout_name";
+    private static final String STATE_DISTANCE = "workout_distance";
     private static final String STATE_TYPES = "workout_types";
     private static final String STATE_DURATIONS = "workout_durations";
     /** Per flattened row: -1 for a single segment, otherwise the index of its block. */
@@ -76,6 +78,7 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
             workoutId = savedInstanceState.getLong(STATE_ID);
             builtin = savedInstanceState.getBoolean(STATE_BUILTIN);
             viewBinding.workoutName.setText(savedInstanceState.getString(STATE_NAME, ""));
+            viewBinding.workoutDistance.setText(savedInstanceState.getString(STATE_DISTANCE, ""));
             adapter.replace(restoreDrafts(savedInstanceState));
         } else if (getIntent().hasExtra(EXTRA_WORKOUT_ID)) {
             workoutId = getIntent().getLongExtra(EXTRA_WORKOUT_ID, 0);
@@ -87,12 +90,30 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
             }
             builtin = workout.builtin();
             viewBinding.workoutName.setText(workout.name());
+            if (workout.isDistance()) {
+                viewBinding.workoutDistance.setText(DistancePace.shortDistance(workout.distanceMeters()));
+            }
             adapter.replace(draftsFrom(workout));
         } else {
             workoutId = 0;
             builtin = false;
             adapter.replace(List.of(new WorkoutSegmentEditAdapter.Draft(SegmentType.RUN, "1:00")));
         }
+        updateDistanceMode();
+        viewBinding.workoutDistance.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable s) {
+                updateDistanceMode();
+            }
+        });
         if (getSupportActionBar() != null) {
             getSupportActionBar().setTitle(workoutId == 0 ? R.string.workout_new : R.string.workout_edit_title);
         }
@@ -104,6 +125,7 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
         outState.putLong(STATE_ID, workoutId);
         outState.putBoolean(STATE_BUILTIN, builtin);
         outState.putString(STATE_NAME, text(viewBinding.workoutName));
+        outState.putString(STATE_DISTANCE, text(viewBinding.workoutDistance));
         List<String> types = new ArrayList<>();
         List<String> durations = new ArrayList<>();
         List<Integer> blockIds = new ArrayList<>();
@@ -195,6 +217,8 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
     public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.workout_edit, menu);
         menu.findItem(R.id.workout_edit_reset).setVisible(builtin);
+        menu.findItem(R.id.workout_edit_add_segment).setVisible(!distanceMode);
+        menu.findItem(R.id.workout_edit_add_rounds).setVisible(!distanceMode);
         return super.onCreateOptionsMenu(menu);
     }
 
@@ -262,6 +286,17 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
             Toast.makeText(this, R.string.workout_need_name, Toast.LENGTH_LONG).show();
             return;
         }
+        String distanceText = text(viewBinding.workoutDistance).trim();
+        if (!distanceText.isEmpty()) {
+            Integer meters = DistancePace.parseDistanceMeters(distanceText);
+            if (meters == null) {
+                Toast.makeText(this, R.string.workout_distance_invalid, Toast.LENGTH_LONG).show();
+                return;
+            }
+            repository.saveWorkout(new Workout(workoutId, name, builtin, List.of(), meters));
+            finish();
+            return;
+        }
         List<WorkoutSegmentEditAdapter.Draft> drafts = adapter.drafts();
         if (drafts.isEmpty()) {
             Toast.makeText(this, R.string.workout_need_segment, Toast.LENGTH_LONG).show();
@@ -318,6 +353,18 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
         }
         viewBinding.workoutSegments.smoothScrollToPosition(position);
     }
+
+    /** A distance workout has no steps, so the step list and step menu items are hidden. */
+    private void updateDistanceMode() {
+        boolean distance = !text(viewBinding.workoutDistance).trim().isEmpty();
+        viewBinding.workoutSegments.setVisibility(distance ? View.GONE : View.VISIBLE);
+        if (distance != distanceMode) {
+            distanceMode = distance;
+            invalidateOptionsMenu();
+        }
+    }
+
+    private boolean distanceMode;
 
     private static String text(EditText editText) {
         return editText.getText() == null ? "" : editText.getText().toString();

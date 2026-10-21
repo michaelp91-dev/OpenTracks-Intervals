@@ -17,6 +17,10 @@ package de.dennisguse.opentracks.ui.workout;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.text.InputType;
+import android.widget.EditText;
+
+import java.time.Duration;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
@@ -38,7 +42,9 @@ import de.dennisguse.opentracks.services.MissingPermissionException;
 import de.dennisguse.opentracks.services.TrackRecordingServiceConnection;
 import de.dennisguse.opentracks.util.IntentUtils;
 import de.dennisguse.opentracks.util.PermissionRequester;
+import de.dennisguse.opentracks.workout.DistancePace;
 import de.dennisguse.opentracks.workout.Workout;
+import de.dennisguse.opentracks.workout.WorkoutSessionStore;
 import de.dennisguse.opentracks.workout.WorkoutRepository;
 
 public class WorkoutsActivity extends AbstractActivity implements WorkoutListAdapter.Listener {
@@ -93,12 +99,95 @@ public class WorkoutsActivity extends AbstractActivity implements WorkoutListAda
     }
 
     @Override
-    public void onStart(Workout workout) {
-        if (repository.getWorkout(workout.id()) == null) {
+    public void onStart(Workout listed) {
+        Workout workout = repository.getWorkout(listed.id());
+        if (workout == null) {
             Toast.makeText(this, R.string.workout_missing, Toast.LENGTH_LONG).show();
             reload();
             return;
         }
+        if (workout.isDistance()) {
+            askPace(workout);
+            return;
+        }
+        launch(workout);
+    }
+
+    /** "Set a pace?" Yes: goal finish time, then update distance. No: plain distance workout. */
+    private void askPace(Workout workout) {
+        WorkoutSessionStore store = new WorkoutSessionStore(this);
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.workout_pace_question)
+                .setMessage(getString(R.string.workout_pace_question_message, DistancePace.shortDistance(workout.distanceMeters())))
+                .setPositiveButton(R.string.workout_pace_yes, (d, w) -> askGoal(workout, store, ""))
+                .setNegativeButton(R.string.workout_pace_no, (d, w) -> {
+                    store.savePace(workout.id(), 0, 0);
+                    launch(workout);
+                })
+                .show();
+    }
+
+    private void askGoal(Workout workout, WorkoutSessionStore store, String prefill) {
+        EditText input = dialogInput(getString(R.string.workout_pace_goal_hint), prefill, InputType.TYPE_CLASS_TEXT);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.workout_pace_goal_title)
+                .setView(wrap(input))
+                .setPositiveButton(android.R.string.ok, null)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            Duration goal = DistancePace.parseFinishTime(input.getText().toString());
+            if (goal == null) {
+                input.setError(getString(R.string.workout_pace_goal_invalid));
+                return;
+            }
+            dialog.dismiss();
+            askEvery(workout, store, goal);
+        }));
+        dialog.show();
+    }
+
+    private void askEvery(Workout workout, WorkoutSessionStore store, Duration goal) {
+        int total = workout.distanceMeters();
+        EditText input = dialogInput(getString(R.string.workout_pace_every_hint, total), Integer.toString(Math.min(1000, total)), InputType.TYPE_CLASS_NUMBER);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.workout_pace_every_title)
+                .setView(wrap(input))
+                .setPositiveButton(android.R.string.ok, null)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            Integer every = DistancePace.parseEvery(input.getText().toString(), total);
+            if (every == null) {
+                input.setError(getString(R.string.workout_pace_every_invalid, total));
+                return;
+            }
+            dialog.dismiss();
+            store.savePace(workout.id(), goal.getSeconds(), every);
+            launch(workout);
+        }));
+        dialog.show();
+    }
+
+    private EditText dialogInput(String hint, String text, int type) {
+        EditText input = new EditText(this);
+        input.setHint(hint);
+        input.setInputType(type);
+        input.setSingleLine(true);
+        input.setText(text);
+        input.setSelectAllOnFocus(true);
+        return input;
+    }
+
+    private View wrap(EditText input) {
+        android.widget.FrameLayout frame = new android.widget.FrameLayout(this);
+        int pad = Math.round(20 * getResources().getDisplayMetrics().density);
+        frame.setPadding(pad, pad / 2, pad, 0);
+        frame.addView(input);
+        return frame;
+    }
+
+    private void launch(Workout workout) {
         try {
             TrackRecordingServiceConnection.executeForeground(this, (service, connection) -> {
                 switch (service.requestStart(workout.id())) {

@@ -31,6 +31,14 @@ public record WorkoutState(
         int walkCount,
         int round,
         int roundCount,
-        boolean finished
+        boolean finished,
+        /* Banner text for a distance workout, e.g. "5 km · 2.31 km · 12:04"; null for timed workouts. */
+        String distanceStatus
 ) {
+    public WorkoutState(String workoutName, int segmentIndex, int segmentCount, SegmentType type, Duration remainingInSegment,
+                        Duration elapsed, Duration total, int runNumber, int runCount, int walkNumber, int walkCount,
+                        int round, int roundCount, boolean finished) {
+        this(workoutName, segmentIndex, segmentCount, type, remainingInSegment, elapsed, total, runNumber, runCount,
+                walkNumber, walkCount, round, roundCount, finished, null);
+    }
 }

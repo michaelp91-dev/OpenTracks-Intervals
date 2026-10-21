@@ -23,13 +23,29 @@ import java.util.List;
  * A workout is an ordered list of items: single segments and repeat blocks.
  * {@link #segments()} and {@link #plannedSteps()} give the expanded, playable order.
  */
-public record Workout(long id, String name, boolean builtin, List<WorkoutItem> items) {
+public record Workout(long id, String name, boolean builtin, List<WorkoutItem> items, int distanceMeters) {
 
+    /**
+     * @param distanceMeters distance goal in meters; 0 for a timed (interval) workout. A distance
+     *                       workout has no timed items.
+     */
     public Workout {
         if (name == null) {
             name = "";
         }
-        items = List.copyOf(items);
+        if (distanceMeters < 0) {
+            throw new IllegalArgumentException("distanceMeters");
+        }
+        items = distanceMeters > 0 ? List.of() : List.copyOf(items);
+    }
+
+    /** A timed workout. */
+    public Workout(long id, String name, boolean builtin, List<WorkoutItem> items) {
+        this(id, name, builtin, items, 0);
+    }
+
+    public boolean isDistance() {
+        return distanceMeters > 0;
     }
 
     /** A workout made only of single segments, as all workouts were before repeat blocks. */

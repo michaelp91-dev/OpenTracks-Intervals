@@ -28,6 +28,9 @@ public final class WorkoutBanner {
         if (state == null) {
             return "";
         }
+        if (state.distanceStatus() != null) {
+            return state.distanceStatus();
+        }
         if (state.finished() || state.type() == null) {
             return context.getString(R.string.workout_cue_complete);
         }

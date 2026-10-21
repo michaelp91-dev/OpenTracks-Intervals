@@ -66,13 +66,13 @@ public final class WorkoutRepository {
 
     public synchronized Workout getWorkout(long id) {
         SQLiteDatabase db = helper.getReadableDatabase();
-        try (Cursor cursor = db.query(WorkoutDatabase.TABLE_WORKOUTS, new String[]{"_id", "name", "builtin"}, "_id=?", new String[]{Long.toString(id)}, null, null, null)) {
+        try (Cursor cursor = db.query(WorkoutDatabase.TABLE_WORKOUTS, new String[]{"_id", "name", "builtin", "distance_m"}, "_id=?", new String[]{Long.toString(id)}, null, null, null)) {
             if (!cursor.moveToFirst()) {
                 return null;
             }
             String name = cursor.getString(1);
             boolean builtin = cursor.getInt(2) != 0;
-            return new Workout(cursor.getLong(0), name, builtin, loadItems(db, id));
+            return new Workout(cursor.getLong(0), name, builtin, loadItems(db, id), Math.max(0, cursor.getInt(3)));
         }
     }
 
@@ -89,6 +89,7 @@ public final class WorkoutRepository {
             long id = workout.id();
             ContentValues values = new ContentValues();
             values.put("name", workout.name());
+            values.put("distance_m", workout.distanceMeters());
             if (id <= 0) {
                 values.put("builtin", workout.builtin() ? 1 : 0);
                 values.put("sort_order", WorkoutOrder.next(maxSortOrder(db)));
