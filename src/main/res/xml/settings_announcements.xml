@@ -102,6 +102,11 @@
             android:defaultValue="@bool/workout_auto_stop_default"
             android:key="@string/workout_auto_stop_key"
             android:title="@string/workout_auto_stop_title" />
+        <Preference
+            android:key="@string/heart_rate_forget_strap_key"
+            android:persistent="false"
+            android:summary="Next time heart rate is on, connect to the first WHOOP found and remember it"
+            android:title="Forget heart-rate strap" />
     </PreferenceCategory>
 
 </PreferenceScreen>

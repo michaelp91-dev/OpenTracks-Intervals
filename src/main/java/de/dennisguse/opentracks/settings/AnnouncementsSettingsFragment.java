@@ -12,6 +12,16 @@ public class AnnouncementsSettingsFragment extends PreferenceFragmentCompat {
     @Override
     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
         addPreferencesFromResource(R.xml.settings_announcements);
+        androidx.preference.Preference forget = findPreference(getString(R.string.heart_rate_forget_strap_key));
+        if (forget != null) {
+            forget.setOnPreferenceClickListener(p -> {
+                de.dennisguse.opentracks.intervals.WhoopHeartRateMonitor monitor = de.dennisguse.opentracks.intervals.WhoopHeartRateMonitor.get(requireContext());
+                String saved = monitor.getSavedAddress();
+                monitor.forgetStrap();
+                android.widget.Toast.makeText(requireContext(), saved != null ? "Forgot strap " + saved : "No strap was saved", android.widget.Toast.LENGTH_LONG).show();
+                return true;
+            });
+        }
     }
 
     @Override

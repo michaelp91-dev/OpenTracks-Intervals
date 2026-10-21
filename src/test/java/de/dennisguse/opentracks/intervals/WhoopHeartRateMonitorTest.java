@@ -93,4 +93,15 @@ public class WhoopHeartRateMonitorTest {
         org.junit.Assert.assertTrue(WhoopHeartRateMonitor.acceptsBonded(null, "AA:BB:CC:DD:EE:02", "WHOOP old"));
         org.junit.Assert.assertFalse(WhoopHeartRateMonitor.acceptsBonded(null, "AA:BB:CC:DD:EE:02", "Pixel Buds"));
     }
+
+    @Test
+    public void hrLabel_showsHeartRateAndBatteryTogetherOnlyWhenConnected() {
+        WhoopHeartRateMonitor.State g = WhoopHeartRateMonitor.State.GREEN;
+        assertEquals("HR \u2665 72  85%", WhoopHeartRateMonitor.hrLabel(true, g, 72, 85, false));
+        assertEquals("HR \u2665 72  --%", WhoopHeartRateMonitor.hrLabel(true, g, 72, null, false));
+        assertEquals("HR \u2665 72  battery n/a", WhoopHeartRateMonitor.hrLabel(true, g, 72, null, true));
+        assertEquals("HR off", WhoopHeartRateMonitor.hrLabel(false, g, 72, 85, false));
+        assertEquals("HR connecting\u2026", WhoopHeartRateMonitor.hrLabel(true, WhoopHeartRateMonitor.State.YELLOW, 72, 85, false));
+        assertEquals("HR not connected", WhoopHeartRateMonitor.hrLabel(true, WhoopHeartRateMonitor.State.RED, 72, 85, false));
+    }
 }

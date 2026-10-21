@@ -56,27 +56,25 @@ limitations under the License.
                 android:textAppearance="?attr/textAppearanceLabelLarge"
                 app:drawableEndCompat="@drawable/status_dot" />
 
+            <TextView
+                android:id="@+id/status_label_hr"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:clickable="false"
+                android:focusable="false"
+                android:gravity="center_vertical"
+                android:maxLines="1"
+                android:text="HR off"
+                android:textAppearance="?attr/textAppearanceLabelLarge" />
+
             <com.google.android.material.materialswitch.MaterialSwitch
                 android:id="@+id/status_switch_hr"
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
-                android:layout_marginStart="8dp"
-                android:contentDescription="Heart rate on or off"
-                android:paddingStart="4dp"
-                android:paddingEnd="4dp"
-                android:switchPadding="8dp"
-                android:text="HR off"
-                android:textAppearance="?attr/textAppearanceLabelLarge" />
+                android:layout_marginStart="4dp"
+                android:contentDescription="Heart rate on or off" />
 
-            <TextView
-                android:id="@+id/status_battery_hr"
-                android:layout_width="wrap_content"
-                android:layout_height="40dp"
-                android:contentDescription="WHOOP battery"
-                android:gravity="center_vertical"
-                android:paddingEnd="8dp"
-                android:textAppearance="?attr/textAppearanceLabelLarge"
-                android:visibility="gone" />
         </LinearLayout>
     </com.google.android.material.appbar.AppBarLayout>
 

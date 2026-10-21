@@ -138,6 +138,10 @@ public class WhoopHeartRateMonitor {
     private final MutableLiveData<Integer> heartRate = new MutableLiveData<>(null);
     private final MutableLiveData<Integer> battery = new MutableLiveData<>(null);
     private final MutableLiveData<String> detail = new MutableLiveData<>("Not connected");
+    /** True once connected for a while without the strap reporting battery (no 0x2A19 and no WHOOP reply). */
+    private final MutableLiveData<Boolean> batteryUnavailable = new MutableLiveData<>(false);
+    private static final long BATTERY_FIRST_RETRY_MS = 3_000;
+    private static final long BATTERY_GIVE_UP_MS = 20_000;
     private final Set<Object> holders = new HashSet<>();
     private final CopyOnWriteArraySet<HeartRateListener> listeners = new CopyOnWriteArraySet<>();
 
@@ -171,6 +175,15 @@ public class WhoopHeartRateMonitor {
         }
     };
     private de.dennisguse.opentracks.services.announcement.TTSManager tts;
+    private final Runnable batteryFirstRetry = () -> {
+        if (gatt != null && connected && lastBattery == null) requestBattery(gatt);
+    };
+    private final Runnable batteryGiveUp = () -> {
+        if (connected && lastBattery == null) {
+            Log.w(TAG, "Strap did not report battery level");
+            batteryUnavailable.postValue(true);
+        }
+    };
 
     private WhoopHeartRateMonitor(Context context) {
         this.context = context.getApplicationContext();
@@ -190,9 +203,26 @@ public class WhoopHeartRateMonitor {
     public LiveData<Integer> getHeartRate() { return heartRate; }
     public LiveData<String> getDetail() { return detail; }
     public LiveData<Integer> getBattery() { return battery; }
+    public LiveData<Boolean> getBatteryUnavailable() { return batteryUnavailable; }
 
     @Nullable
     public String getDeviceName() { return deviceName; }
+
+    public boolean isConnected() { return connected; }
+
+    /** Label next to the switch, e.g. "HR ♥ 72  85%". Never shows a value unless connected. */
+    public static String hrLabel(boolean enabled, @Nullable State state, @Nullable Integer bpm, @Nullable Integer batteryPct, boolean batteryUnavailable) {
+        if (!enabled) return "HR off";
+        if (state == State.GREEN) {
+            String s = bpm != null ? "HR \u2665 " + bpm : "HR connected";
+            if (batteryPct != null) s += "  " + batteryPct + "%";
+            else if (batteryUnavailable) s += "  battery n/a";
+            else s += "  --%";
+            return s;
+        }
+        if (state == State.YELLOW) return "HR connecting\u2026";
+        return "HR not connected";
+    }
 
     public void addListener(HeartRateListener l) { listeners.add(l); }
     public void removeListener(HeartRateListener l) { listeners.remove(l); }
@@ -259,6 +289,8 @@ public class WhoopHeartRateMonitor {
         closeInternal();
         heartRate.postValue(null);
         battery.postValue(null);
+        batteryUnavailable.postValue(false);
+        lastBattery = null;
         lastHrMs = 0;
         setState(State.RED, why);
     }
@@ -467,6 +499,12 @@ public class WhoopHeartRateMonitor {
             step = "streaming";
             handler.removeCallbacks(batteryRefresh);
             handler.postDelayed(batteryRefresh, BATTERY_REFRESH_MS);
+            if (lastBattery == null) {
+                handler.removeCallbacks(batteryFirstRetry);
+                handler.removeCallbacks(batteryGiveUp);
+                handler.postDelayed(batteryFirstRetry, BATTERY_FIRST_RETRY_MS);
+                handler.postDelayed(batteryGiveUp, BATTERY_GIVE_UP_MS);
+            }
             String saved = prefs.getString(KEY_ADDRESS, null);
             if (currentDevice != null && (saved == null || saved.equalsIgnoreCase(currentDevice.getAddress()))) {
                 // Only the first strap is adopted; a different device never replaces the saved one.
@@ -560,7 +598,11 @@ public class WhoopHeartRateMonitor {
                         }
                     }
                 }
-                if (batteryChar != null) enqueueRead(g, batteryChar);
+                if (batteryChar != null) {
+                    enqueueRead(g, batteryChar);
+                    if ((batteryChar.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0) enqueueNotify(g, batteryChar);
+                }
+                Log.i(TAG, "Battery sources: 0x2A19=" + (batteryChar != null) + " whoopCmd=" + (cmdOutChar != null));
                 setState(State.YELLOW, "Waiting for heart rate" + attemptLabel() + "…");
                 cancelTimeout();
                 handler.removeCallbacks(dataTimeout);
@@ -614,6 +656,13 @@ public class WhoopHeartRateMonitor {
                 bpm = parseStandardHr(value);
             } else if (WHOOP_DATA_FROM_STRAP.equals(c.getUuid())) {
                 bpm = parseWhoopRealtimeHr(value);
+            }
+            if (BATTERY_LEVEL.equals(c.getUuid())) {
+                if (value.length > 0 && (value[0] & 0xFF) <= 100) {
+                    int pct = value[0] & 0xFF;
+                    handler.post(() -> { if (g == gatt) onBattery(pct, "0x2A19 notify"); });
+                }
+                return;
             }
             if (WHOOP_CMD_FROM_STRAP.equals(c.getUuid())) {
                 Integer pct = parseWhoopBatteryResponse(value);
@@ -671,6 +720,8 @@ public class WhoopHeartRateMonitor {
         Log.i(TAG, "Battery " + pct + "% via " + source);
         lastBattery = pct;
         battery.postValue(pct);
+        batteryUnavailable.postValue(false);
+        handler.removeCallbacks(batteryGiveUp);
     }
 
     private void requestBattery(BluetoothGatt g) {
@@ -725,18 +776,31 @@ public class WhoopHeartRateMonitor {
         gattQueue.add(() -> writeCharacteristic(g, c, value));
     }
 
+    /** If a GATT callback never arrives, later ops (like the battery read) would wait forever. */
+    private static final long GATT_OP_TIMEOUT_MS = 3_000;
+    private final Runnable opWatchdog = () -> {
+        if (gattBusy) {
+            Log.w(TAG, "GATT op timed out; continuing with the next one");
+            gattBusy = false;
+            nextOp();
+        }
+    };
+
     private void nextOp() {
         handler.post(() -> {
             if (gattBusy || gatt == null) return;
             Runnable op = gattQueue.poll();
             if (op == null) return;
             gattBusy = true;
+            handler.removeCallbacks(opWatchdog);
+            handler.postDelayed(opWatchdog, GATT_OP_TIMEOUT_MS);
             op.run();
         });
     }
 
     private void opDone() {
         handler.post(() -> {
+            handler.removeCallbacks(opWatchdog);
             gattBusy = false;
             nextOp();
         });
@@ -844,6 +908,7 @@ public class WhoopHeartRateMonitor {
     private void closeGatt() {
         gattQueue.clear();
         gattBusy = false;
+        handler.removeCallbacks(opWatchdog);
         if (gatt != null) {
             BluetoothGatt old = gatt;
             gatt = null;
@@ -860,6 +925,8 @@ public class WhoopHeartRateMonitor {
         cancelTimeout();
         handler.removeCallbacks(dataTimeout);
         handler.removeCallbacks(batteryRefresh);
+        handler.removeCallbacks(batteryFirstRetry);
+        handler.removeCallbacks(batteryGiveUp);
         if (pendingRetry != null) handler.removeCallbacks(pendingRetry);
         pendingRetry = null;
         stopScan();

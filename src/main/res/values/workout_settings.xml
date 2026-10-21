@@ -22,6 +22,7 @@ limitations under the License.
     <!-- Intervals: start-screen heart-rate switch. Off = no HR scan/connect/recording at all. -->
     <string name="heart_rate_enabled_key" translatable="false">heartRateSensorEnabled</string>
     <bool name="heart_rate_enabled_default" translatable="false">false</bool>
+    <string name="heart_rate_forget_strap_key" translatable="false">heartRateForgetStrap</string>
     <bool name="workout_auto_stop_default" translatable="false">true</bool>
     <string name="record_sensor_data_key" translatable="false">recordSensorData</string>
     <bool name="record_sensor_data_default" translatable="false">true</bool>
