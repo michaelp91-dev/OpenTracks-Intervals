@@ -93,7 +93,7 @@ public final class WorkoutController {
             return;
         }
         this.distance = null;
-        this.engine = new WorkoutEngine(workout);
+        this.engine = new WorkoutEngine(workout, sessionStore.loadRunLastWalk(workout.id()));
 
         WorkoutEngine.Tick tick = engine.onElapsed(Duration.ZERO);
         writeClosed(tick.closed(), startInstant);
@@ -197,7 +197,7 @@ public final class WorkoutController {
         this.startInstant = now.minusMillis(elapsedMs);
         this.startElapsedRealtime = saved.startElapsedMs();
         this.distance = null;
-        this.engine = new WorkoutEngine(stored);
+        this.engine = new WorkoutEngine(stored, sessionStore.loadRunLastWalk(stored.id()));
         this.engine.resumeAt(Duration.ofMillis(elapsedMs));
         this.active = true;
         this.holdingFirstCue = false;

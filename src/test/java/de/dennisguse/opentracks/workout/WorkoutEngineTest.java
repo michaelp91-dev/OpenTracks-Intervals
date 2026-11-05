@@ -259,12 +259,13 @@ public class WorkoutEngineTest {
         ));
         assertEquals("2 minute run", engine.onElapsed(Duration.ZERO).cue());
         assertNull(engine.onElapsed(Duration.ofMillis(59_999)).cue());
-        assertEquals("Halfway", engine.onElapsed(Duration.ofSeconds(60)).cue());
+        assertEquals("Halfway, 1 minute left", engine.onElapsed(Duration.ofSeconds(60)).cue());
         assertNull(engine.onElapsed(Duration.ofSeconds(61)).cue());
 
         assertEquals("15 minute walk", engine.onElapsed(Duration.ofSeconds(120)).cue());
         // Walk midpoint 7:30 in = 9:30 into the workout, which is also the workout midpoint (19:00 / 2).
-        assertNull(engine.onElapsed(Duration.ofSeconds(120 + 449)).cue());
+        // 8:00 left (7:00 in) was not ticked, so the next tick says it.
+        assertEquals("8 minutes left", engine.onElapsed(Duration.ofSeconds(120 + 449)).cue());
         assertEquals("Halfway point", engine.onElapsed(Duration.ofSeconds(120 + 450)).cue());
         assertNull(engine.onElapsed(Duration.ofSeconds(120 + 451)).cue());
     }
@@ -338,7 +339,7 @@ public class WorkoutEngineTest {
         );
         WorkoutEngine before = new WorkoutEngine(plan);
         before.resumeAt(Duration.ofSeconds(330));
-        assertEquals("Halfway", before.onElapsed(Duration.ofSeconds(360)).cue());
+        assertEquals("Halfway, 1 minute left", before.onElapsed(Duration.ofSeconds(360)).cue());
 
         WorkoutEngine after = new WorkoutEngine(plan);
         after.resumeAt(Duration.ofSeconds(361));

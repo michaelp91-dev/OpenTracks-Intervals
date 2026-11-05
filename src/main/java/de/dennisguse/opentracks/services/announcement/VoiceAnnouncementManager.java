@@ -176,12 +176,17 @@ public class VoiceAnnouncementManager implements SharedPreferences.OnSharedPrefe
      * {@link TTSManager#speak} still skips speech during a phone call.
      */
     public void announceWorkoutCue(@NonNull CharSequence text) {
+        announceWorkoutCue(text, true);
+    }
+
+    /** @param fallbackTone false keeps a not-yet-ready TTS silent instead of playing its tone */
+    public void announceWorkoutCue(@NonNull CharSequence text, boolean fallbackTone) {
         if (voiceAnnouncement == null) {
             Log.w(TAG, "Cannot announce workout cue; TTS is stopped.");
             return;
         }
         Log.i(TAG, "Workout cue: " + text);
-        voiceAnnouncement.speak(text);
+        voiceAnnouncement.speak(text, fallbackTone);
     }
 
     public boolean isTtsReady() {

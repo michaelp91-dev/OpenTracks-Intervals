@@ -455,8 +455,10 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         }
         // "Go" is spoken immediately so the workout's first cue cannot cancel it.
         if (StartCountdown.GO.equals(cue)) {
-            if (voiceAnnouncementManager != null) {
-                voiceAnnouncementManager.announceWorkoutCue(cue);
+            if (cuePlayer != null) {
+                cuePlayer.speakOnly(cue);
+            } else if (voiceAnnouncementManager != null) {
+                voiceAnnouncementManager.announceWorkoutCue(cue, false);
             }
             return;
         }

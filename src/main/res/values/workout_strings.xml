@@ -70,6 +70,10 @@ limitations under the License.
     <string name="workout_distance_helper" translatable="false">e.g. 5k, 15 km, 5000 m. Leave blank for a timed interval workout.</string>
     <string name="workout_distance_invalid" translatable="false">Enter a distance like 5k, 15 km or 5000 m</string>
     <string name="workout_distance_summary" translatable="false">Distance · %1$s</string>
+    <string name="workout_last_walk_question" translatable="false">Run the last walk?</string>
+    <string name="workout_last_walk_message" translatable="false">Yes joins the final walk onto the run before it, so the last round is one longer run.</string>
+    <string name="workout_last_walk_yes" translatable="false">Yes, run it</string>
+    <string name="workout_last_walk_no" translatable="false">No, walk it</string>
     <string name="workout_pace_question" translatable="false">Set a pace?</string>
     <string name="workout_pace_yes" translatable="false">Yes</string>
     <string name="workout_pace_no" translatable="false">No</string>

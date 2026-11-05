@@ -44,6 +44,7 @@ import de.dennisguse.opentracks.util.IntentUtils;
 import de.dennisguse.opentracks.util.PermissionRequester;
 import de.dennisguse.opentracks.workout.DistancePace;
 import de.dennisguse.opentracks.workout.Workout;
+import de.dennisguse.opentracks.workout.LastWalkMerge;
 import de.dennisguse.opentracks.workout.WorkoutSessionStore;
 import de.dennisguse.opentracks.workout.WorkoutRepository;
 
@@ -110,7 +111,24 @@ public class WorkoutsActivity extends AbstractActivity implements WorkoutListAda
             askPace(workout);
             return;
         }
-        launch(workout);
+        WorkoutSessionStore store = new WorkoutSessionStore(this);
+        if (!LastWalkMerge.applies(workout)) {
+            store.saveRunLastWalk(workout.id(), false);
+            launch(workout);
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.workout_last_walk_question)
+                .setMessage(R.string.workout_last_walk_message)
+                .setPositiveButton(R.string.workout_last_walk_yes, (d, w) -> {
+                    store.saveRunLastWalk(workout.id(), true);
+                    launch(workout);
+                })
+                .setNegativeButton(R.string.workout_last_walk_no, (d, w) -> {
+                    store.saveRunLastWalk(workout.id(), false);
+                    launch(workout);
+                })
+                .show();
     }
 
     /** "Set a pace?" Yes: goal finish time, then update distance. No: plain distance workout. */

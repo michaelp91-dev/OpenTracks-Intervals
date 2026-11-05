@@ -123,6 +123,10 @@ public class TTSManager {
     }
 
     public void speak(@NonNull CharSequence announcement) {
+        speak(announcement, true);
+    }
+
+    public void speak(@NonNull CharSequence announcement, boolean fallbackTone) {
         synchronized (this) {
             if (!ttsReady) {
                 ttsReady = ttsInitStatus == TextToSpeech.SUCCESS;
@@ -139,6 +143,10 @@ public class TTSManager {
         }
 
         if (!ttsReady) {
+            if (!fallbackTone) {
+                Log.i(TAG, "TTS not ready; voice-only cue skipped: " + announcement);
+                return;
+            }
             if (ttsFallback == null) {
                 Log.w(TAG, "MediaPlayer for ttsFallback was not created.");
             } else {

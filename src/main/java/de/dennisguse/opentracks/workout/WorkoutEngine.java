@@ -75,6 +75,10 @@ public final class WorkoutEngine {
     private boolean stopped;
     /** Smallest countdown mark already spoken in the current segment. */
     private int countdownAnnounced = Integer.MAX_VALUE;
+    /** Smallest "N minutes left" mark already spoken (or skipped) in the current segment. */
+    private int minuteAnnounced = Integer.MAX_VALUE;
+    /** Intervals at least this long say every whole minute left. */
+    static final long MINUTE_CALLOUTS_MIN_MS = 180_000L;
 
     /** Plain segments with no repeat blocks, so no round cues. */
     public WorkoutEngine(List<WorkoutSegment> segments) {
@@ -85,7 +89,13 @@ public final class WorkoutEngine {
 
     /** Expands the workout's repeat blocks into rounds; the first run of each round announces the round. */
     public WorkoutEngine(Workout workout) {
-        this.plan = workout.plannedSteps();
+        this(workout, false);
+    }
+
+    /** @param runLastWalk merge the final walk into the run before it (see {@link LastWalkMerge}) */
+    public WorkoutEngine(Workout workout, boolean runLastWalk) {
+        List<PlannedStep> steps = workout.plannedSteps();
+        this.plan = runLastWalk ? LastWalkMerge.merge(steps) : steps;
         List<WorkoutSegment> expanded = new ArrayList<>();
         for (PlannedStep step : plan) {
             expanded.add(step.segment());
@@ -160,6 +170,8 @@ public final class WorkoutEngine {
                 spoken.append(WorkoutSpeech.stepCue(plan.get(index), segmentLength(index)));
                 announcedIndex = index;
                 countdownAnnounced = Integer.MAX_VALUE;
+                minuteAnnounced = Integer.MAX_VALUE;
+                skipPassedMinutes(index, safe);
                 // A late tick that lands past the midpoint does not say "Halfway" on top of the start cue.
                 intervalHalfwayDone = !intervalHalfwayApplies(index) || safe.compareTo(intervalHalfway(index)) >= 0;
             }
@@ -167,12 +179,18 @@ public final class WorkoutEngine {
                 appendPhrase(spoken, HALFWAY_CUE);
                 halfwayAnnounced = true;
             }
+            boolean halfwaySpokenNow = false;
             if (!intervalHalfwayDone && safe.compareTo(intervalHalfway(index)) >= 0) {
                 // When the workout's "Halfway point" is said on this tick, a second "Halfway" adds nothing.
                 if (!crossedHalfway) {
-                    appendPhrase(spoken, INTERVAL_HALFWAY_CUE);
+                    appendPhrase(spoken, intervalHalfwayPhrase(index));
+                    halfwaySpokenNow = true;
                 }
                 intervalHalfwayDone = true;
+            }
+            int minutes = takeMinute(index, timeline.endOffset(index).minus(safe));
+            if (minutes > 0 && !(halfwaySpokenNow && halfwayIsMinuteMark(index, minutes))) {
+                appendPhrase(spoken, minutesLeftPhrase(minutes));
             }
             int mark = takeCountdown(timeline.endOffset(index).minus(safe), segmentLength(index));
             if (mark > 0) {
@@ -238,6 +256,8 @@ public final class WorkoutEngine {
         finished = false;
         stopped = false;
         countdownAnnounced = Integer.MAX_VALUE;
+        minuteAnnounced = Integer.MAX_VALUE;
+        skipPassedMinutes(index, safe);
         intervalHalfwayDone = !intervalHalfwayApplies(index) || safe.compareTo(intervalHalfway(index)) >= 0;
         Duration remaining = timeline.endOffset(index).minus(safe);
         long remainingMs = Math.max(0, remaining.toMillis());
@@ -252,6 +272,62 @@ public final class WorkoutEngine {
     /** Exact midpoint offset of an interval, to the millisecond (7:30 into a 15:00 walk, 22.5 s into a 45 s run). */
     private Duration intervalHalfway(int index) {
         return timeline.startOffset(index).plus(segmentLength(index).dividedBy(2));
+    }
+
+    /** "Halfway", or "Halfway, 1 minute left" when the midpoint is a whole minute from the end. */
+    private String intervalHalfwayPhrase(int index) {
+        long halfMs = segmentLength(index).toMillis() / 2;
+        if (halfMs > 0 && halfMs % 60_000L == 0) {
+            return INTERVAL_HALFWAY_CUE + ", " + minutesLeftPhrase((int) (halfMs / 60_000L));
+        }
+        return INTERVAL_HALFWAY_CUE;
+    }
+
+    private boolean halfwayIsMinuteMark(int index, int minutes) {
+        long lengthMs = segmentLength(index).toMillis();
+        return lengthMs % 2 == 0 && lengthMs / 2 == minutes * 60_000L;
+    }
+
+    public static String minutesLeftPhrase(int minutes) {
+        return minutes == 1 ? "1 minute left" : minutes + " minutes left";
+    }
+
+    /** Whole-minute marks (minutes left) for a segment, longest first. Empty below 3 minutes. */
+    public static List<Integer> minuteMarks(Duration segmentLength) {
+        long lengthMs = segmentLength == null ? 0 : segmentLength.toMillis();
+        List<Integer> marks = new ArrayList<>();
+        if (lengthMs < MINUTE_CALLOUTS_MIN_MS) {
+            return marks;
+        }
+        for (int m = (int) ((lengthMs - 1) / 60_000L); m >= 1; m--) {
+            marks.add(m);
+        }
+        return marks;
+    }
+
+    /** Latest minute mark reached and not yet spoken; earlier unspoken marks are dropped. */
+    private int takeMinute(int index, Duration remaining) {
+        long remainingMs = Math.max(0, remaining.toMillis());
+        int chosen = 0;
+        for (int m : minuteMarks(segmentLength(index))) {
+            if (remainingMs <= m * 60_000L && m < minuteAnnounced) {
+                chosen = m;
+            }
+        }
+        if (chosen > 0) {
+            minuteAnnounced = chosen;
+        }
+        return chosen;
+    }
+
+    /** On entering late or resuming, marks already behind us are not spoken. */
+    private void skipPassedMinutes(int index, Duration elapsed) {
+        long remainingMs = Math.max(0, timeline.endOffset(index).minus(elapsed).toMillis());
+        for (int m : minuteMarks(segmentLength(index))) {
+            if (remainingMs < m * 60_000L) {
+                minuteAnnounced = Math.min(minuteAnnounced, m);
+            }
+        }
     }
 
     private boolean intervalHalfwayApplies(int index) {

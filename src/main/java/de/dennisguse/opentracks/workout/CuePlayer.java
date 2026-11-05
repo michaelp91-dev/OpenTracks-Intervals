@@ -15,6 +15,10 @@
  */
 package de.dennisguse.opentracks.workout;
 
+import android.os.SystemClock;
+
+import de.dennisguse.opentracks.services.StartCountdown;
+
 import android.content.Context;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
@@ -49,11 +53,46 @@ public final class CuePlayer {
         this.voiceAnnouncementManager = voiceAnnouncementManager;
     }
 
+    /** Time a spoken-only countdown word ("1" or "Go") is given before the next cue may beep or talk over it. */
+    private static final long BARE_WORD_MS = 900;
+    private long lastBareSpokenAt;
+
+    /** Speaks right away with no beep, no vibration, and no fallback tone. For 5-4-3-2-1 and "Go". */
+    public void speakOnly(CharSequence text) {
+        if (text == null || text.length() == 0) {
+            return;
+        }
+        if (pendingSpeak != null) {
+            handler.removeCallbacks(pendingSpeak);
+            pendingSpeak = null;
+        }
+        lastBareSpokenAt = SystemClock.elapsedRealtime();
+        Log.i(TAG, "Speaking (voice only): " + text);
+        voiceAnnouncementManager.announceWorkoutCue(text, false);
+    }
+
     public void play(CharSequence text) {
         if (text == null || text.length() == 0) {
             return;
         }
-        boolean countdownOnly = isBareCountdown(text);
+        if (isBareCountdown(text)) {
+            speakOnly(text);
+            return;
+        }
+        // Let a just-spoken "1" or "Go" finish before this cue beeps or flushes it.
+        long wait = lastBareSpokenAt + BARE_WORD_MS - SystemClock.elapsedRealtime();
+        if (wait > 0) {
+            if (pendingSpeak != null) {
+                handler.removeCallbacks(pendingSpeak);
+            }
+            pendingSpeak = () -> {
+                pendingSpeak = null;
+                play(text);
+            };
+            handler.postDelayed(pendingSpeak, wait);
+            return;
+        }
+        boolean countdownOnly = false;
         if (!countdownOnly && PreferencesUtils.shouldWorkoutCueBeep()) {
             beep();
         }
@@ -71,10 +110,10 @@ public final class CuePlayer {
         handler.postDelayed(pendingSpeak, countdownOnly ? 0 : SPEAK_DELAY_MS);
     }
 
-    /** 5, 4, 3, 2, and 1 are spoken with no beep and no vibration. The 10-second cue still alerts. */
+    /** 5, 4, 3, 2, 1 and "Go" are spoken only: no beep, no vibration, no fallback tone. The 10-second cue still alerts. */
     private static boolean isBareCountdown(CharSequence text) {
         String value = text.toString();
-        return "1".equals(value) || "2".equals(value) || "3".equals(value) || "4".equals(value) || "5".equals(value);
+        return StartCountdown.GO.equals(value) || "1".equals(value) || "2".equals(value) || "3".equals(value) || "4".equals(value) || "5".equals(value);
     }
 
     public void release() {

@@ -32,7 +32,23 @@ public final class WorkoutSessionStore {
     private static final String PACE_GOAL_S = "pace_goal_s";
     private static final String PACE_EVERY_M = "pace_every_m";
 
+    private static final String LAST_WALK_WORKOUT_ID = "last_walk_workout_id";
+    private static final String LAST_WALK_RUN = "last_walk_run";
+
     private final SharedPreferences preferences;
+
+    /** "Run the last walk?" answer for the next start of this workout. Cleared with the session. */
+    @SuppressLint("ApplySharedPref")
+    public void saveRunLastWalk(long workoutId, boolean run) {
+        preferences.edit()
+                .putLong(LAST_WALK_WORKOUT_ID, workoutId)
+                .putBoolean(LAST_WALK_RUN, run)
+                .commit();
+    }
+
+    public boolean loadRunLastWalk(long workoutId) {
+        return preferences.getLong(LAST_WALK_WORKOUT_ID, -1) == workoutId && preferences.getBoolean(LAST_WALK_RUN, false);
+    }
 
     /**
      * Pace choice for the next start of a distance workout. goalSeconds 0 means no pace.
