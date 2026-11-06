@@ -37,7 +37,6 @@ import de.dennisguse.opentracks.workout.DistancePace;
 import de.dennisguse.opentracks.workout.SegmentType;
 import de.dennisguse.opentracks.workout.Workout;
 import de.dennisguse.opentracks.workout.WorkoutBlock;
-import de.dennisguse.opentracks.workout.ExtraSegments;
 import de.dennisguse.opentracks.workout.WorkoutFormat;
 import de.dennisguse.opentracks.workout.WorkoutItem;
 import de.dennisguse.opentracks.workout.WorkoutRepository;
@@ -220,7 +219,6 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
         menu.findItem(R.id.workout_edit_reset).setVisible(builtin);
         menu.findItem(R.id.workout_edit_add_segment).setVisible(!distanceMode);
         menu.findItem(R.id.workout_edit_add_rounds).setVisible(!distanceMode);
-        menu.findItem(R.id.workout_edit_extras).setVisible(!distanceMode);
         return super.onCreateOptionsMenu(menu);
     }
 
@@ -240,10 +238,6 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
             RoundsBlockDialog.show(this, null, this::addBlock);
             return true;
         }
-        if (item.getItemId() == R.id.workout_edit_extras) {
-            showExtrasDialog();
-            return true;
-        }
         if (item.getItemId() == R.id.workout_edit_reset) {
             repository.resetPreset(workoutId);
             Workout workout = repository.getWorkout(workoutId);
@@ -254,62 +248,6 @@ public class WorkoutEditActivity extends AbstractActivity implements WorkoutSegm
             return true;
         }
         return super.onOptionsItemSelected(item);
-    }
-
-    private String extraText(SegmentType type) {
-        for (WorkoutSegmentEditAdapter.Draft draft : adapter.drafts()) {
-            if (!draft.isBlock() && draft.type == type) {
-                return draft.durationText;
-            }
-        }
-        return "";
-    }
-
-    /** Durations for warm-up jog, prepare and cool-down jog; blank or 0 leaves one out. */
-    private void showExtrasDialog() {
-        SegmentType[] kinds = {SegmentType.WARMUP_JOG, SegmentType.PREPARE, SegmentType.COOLDOWN_JOG};
-        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
-        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
-        int pad = (int) (20 * getResources().getDisplayMetrics().density);
-        layout.setPadding(pad, pad / 2, pad, 0);
-        com.google.android.material.textfield.TextInputEditText[] fields = new com.google.android.material.textfield.TextInputEditText[kinds.length];
-        for (int i = 0; i < kinds.length; i++) {
-            com.google.android.material.textfield.TextInputLayout box = new com.google.android.material.textfield.TextInputLayout(this);
-            box.setHint(getString(kinds[i].labelRes()) + " (" + getString(R.string.workout_extras_hint) + ")");
-            fields[i] = new com.google.android.material.textfield.TextInputEditText(box.getContext());
-            fields[i].setInputType(android.text.InputType.TYPE_CLASS_DATETIME | android.text.InputType.TYPE_DATETIME_VARIATION_TIME);
-            fields[i].setText(extraText(kinds[i]));
-            box.addView(fields[i]);
-            layout.addView(box);
-        }
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle(R.string.workout_extras)
-                .setView(layout)
-                .setPositiveButton(android.R.string.ok, null)
-                .setNegativeButton(android.R.string.cancel, null)
-                .create();
-        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            Duration[] values = new Duration[kinds.length];
-            for (int i = 0; i < kinds.length; i++) {
-                String text = fields[i].getText() == null ? "" : fields[i].getText().toString().trim();
-                if (text.isEmpty()) {
-                    values[i] = Duration.ZERO;
-                    continue;
-                }
-                values[i] = WorkoutFormat.parseMinutesSeconds(text);
-                if (values[i] == null) {
-                    fields[i].setError(getString(R.string.workout_extras_invalid));
-                    return;
-                }
-            }
-            adapter.replace(ExtraSegments.apply(adapter.drafts(),
-                    draft -> draft.isBlock() ? null : draft.type,
-                    values[0], values[1], values[2],
-                    (type, duration) -> new WorkoutSegmentEditAdapter.Draft(type,
-                            WorkoutFormat.minutesSeconds(duration))));
-            dialog.dismiss();
-        }));
-        dialog.show();
     }
 
     @Override

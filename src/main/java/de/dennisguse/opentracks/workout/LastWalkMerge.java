@@ -20,25 +20,26 @@ import java.util.List;
 
 /**
  * "Run the last walk": the final walk interval joins the run right before it,
- * so 1:00 run + 1:30 walk becomes one 2:30 run. Only a cool-down jog or walk may follow that walk.
+ * so 1:00 run + 1:30 walk becomes one 2:30 run. Segments may be in any order: whatever
+ * follows that walk (cool-down, prepare, jogs) is left as is.
  */
 public final class LastWalkMerge {
 
     private LastWalkMerge() {
     }
 
-    /** Index of the walk that would be merged, or -1 when the workout does not end in run then walk. */
+    /** Index of the walk that would be merged, or -1 when the last walk interval does not follow a run. */
     public static int mergeableWalkIndex(List<PlannedStep> plan) {
         int walk = -1;
         for (int i = plan.size() - 1; i >= 0; i--) {
             SegmentType type = plan.get(i).segment().type();
-            if (type.isCooldownPart()) {
-                continue;
+            if (type.isRun()) {
+                break;
             }
             if (type == SegmentType.WALK) {
                 walk = i;
+                break;
             }
-            break;
         }
         if (walk <= 0 || !plan.get(walk - 1).segment().type().isRun()) {
             return -1;

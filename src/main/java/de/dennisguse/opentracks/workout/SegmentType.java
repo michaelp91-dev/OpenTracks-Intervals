@@ -66,11 +66,6 @@ public enum SegmentType {
         return this == WARMUP_JOG || this == COOLDOWN_JOG;
     }
 
-    /** Segments that may follow the last walk without blocking "run the last walk". */
-    public boolean isCooldownPart() {
-        return this == COOLDOWN || this == COOLDOWN_JOG;
-    }
-
     public static SegmentType fromDatabase(String value) {
         return valueOf(value);
     }

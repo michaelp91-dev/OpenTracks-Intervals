@@ -29,10 +29,6 @@ limitations under the License.
         android:title="@string/workout_add_rounds"
         app:showAsAction="never" />
     <item
-        android:id="@+id/workout_edit_extras"
-        android:title="@string/workout_extras"
-        app:showAsAction="never" />
-    <item
         android:id="@+id/workout_edit_reset"
         android:title="@string/workout_reset"
         android:visible="false"
