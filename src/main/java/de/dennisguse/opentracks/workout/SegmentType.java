@@ -20,9 +20,13 @@ import androidx.annotation.StringRes;
 import de.dennisguse.opentracks.R;
 
 public enum SegmentType {
+    // Order is the editor's type list order.
     WARMUP(R.string.workout_segment_warmup, "Warm-up walk"),
+    WARMUP_JOG(R.string.workout_segment_warmup_jog, "Warm-up jog"),
+    PREPARE(R.string.workout_segment_prepare, "Prepare"),
     RUN(R.string.workout_segment_run, "Run"),
     WALK(R.string.workout_segment_walk, "Walk"),
+    COOLDOWN_JOG(R.string.workout_segment_cooldown_jog, "Cool-down jog"),
     COOLDOWN(R.string.workout_segment_cooldown, "Cool-down walk");
 
     @StringRes
@@ -55,6 +59,16 @@ public enum SegmentType {
     /** Warm-up, walk intervals, and cool-down. */
     public boolean isAnyWalk() {
         return this == WARMUP || this == WALK || this == COOLDOWN;
+    }
+
+    /** Warm-up jog and cool-down jog. Not run intervals: they are not counted or merged. */
+    public boolean isJog() {
+        return this == WARMUP_JOG || this == COOLDOWN_JOG;
+    }
+
+    /** Segments that may follow the last walk without blocking "run the last walk". */
+    public boolean isCooldownPart() {
+        return this == COOLDOWN || this == COOLDOWN_JOG;
     }
 
     public static SegmentType fromDatabase(String value) {

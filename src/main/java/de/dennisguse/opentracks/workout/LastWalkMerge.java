@@ -20,7 +20,7 @@ import java.util.List;
 
 /**
  * "Run the last walk": the final walk interval joins the run right before it,
- * so 1:00 run + 1:30 walk becomes one 2:30 run. Only a cool-down may follow that walk.
+ * so 1:00 run + 1:30 walk becomes one 2:30 run. Only a cool-down jog or walk may follow that walk.
  */
 public final class LastWalkMerge {
 
@@ -32,7 +32,7 @@ public final class LastWalkMerge {
         int walk = -1;
         for (int i = plan.size() - 1; i >= 0; i--) {
             SegmentType type = plan.get(i).segment().type();
-            if (type == SegmentType.COOLDOWN) {
+            if (type.isCooldownPart()) {
                 continue;
             }
             if (type == SegmentType.WALK) {

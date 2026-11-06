@@ -32,8 +32,9 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
      * 2: sensor file table. 3: repeat blocks ({@code block_id}, {@code block_rounds} on segments).
      * 4: user order of the Workouts list ({@code sort_order} on workouts).
      * 5: distance workouts ({@code distance_m} on workouts, 0 = timed).
+     * 6: warm-up jog, prepare and cool-down jog segment types (CHECK widened).
      */
-    private static final int VERSION = 5;
+    private static final int VERSION = 6;
 
     static final String TABLE_WORKOUTS = "workouts";
     static final String TABLE_SEGMENTS = "workout_segments";
@@ -71,14 +72,7 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
                 + "builtin INTEGER NOT NULL DEFAULT 0,"
                 + "sort_order INTEGER NOT NULL DEFAULT 0,"
                 + "distance_m INTEGER NOT NULL DEFAULT 0)");
-        db.execSQL("CREATE TABLE " + TABLE_SEGMENTS + " ("
-                + "_id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                + "workout_id INTEGER NOT NULL REFERENCES " + TABLE_WORKOUTS + "(_id) ON DELETE CASCADE,"
-                + "position INTEGER NOT NULL,"
-                + "type TEXT NOT NULL CHECK(type IN ('WARMUP','RUN','WALK','COOLDOWN')),"
-                + "duration_s INTEGER NOT NULL,"
-                + "block_id INTEGER,"
-                + "block_rounds INTEGER)");
+        db.execSQL(createSegments(TABLE_SEGMENTS));
         db.execSQL("CREATE TABLE " + TABLE_TRACK_SEGMENTS + " ("
                 + "_id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 + "track_id INTEGER NOT NULL,"
@@ -91,6 +85,28 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
         db.execSQL("CREATE INDEX track_segments_track_id_index ON " + TABLE_TRACK_SEGMENTS + "(track_id)");
         db.execSQL(CREATE_SENSOR_FILES);
         seed(db);
+    }
+
+    static String segmentTypeCheck() {
+        StringBuilder in = new StringBuilder();
+        for (SegmentType type : SegmentType.values()) {
+            if (in.length() > 0) {
+                in.append(',');
+            }
+            in.append('\'').append(type.name()).append('\'');
+        }
+        return "CHECK(type IN (" + in + "))";
+    }
+
+    static String createSegments(String table) {
+        return "CREATE TABLE " + table + " ("
+                + "_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                + "workout_id INTEGER NOT NULL REFERENCES " + TABLE_WORKOUTS + "(_id) ON DELETE CASCADE,"
+                + "position INTEGER NOT NULL,"
+                + "type TEXT NOT NULL " + segmentTypeCheck() + ","
+                + "duration_s INTEGER NOT NULL,"
+                + "block_id INTEGER,"
+                + "block_rounds INTEGER)";
     }
 
     @Override
@@ -110,6 +126,14 @@ public final class WorkoutDatabase extends SQLiteOpenHelper {
         if (oldVersion < 5) {
             // Existing workouts get 0 = timed, so they play exactly as before.
             db.execSQL("ALTER TABLE " + TABLE_WORKOUTS + " ADD COLUMN distance_m INTEGER NOT NULL DEFAULT 0");
+        }
+        if (oldVersion < 6) {
+            // SQLite cannot alter a CHECK, so copy the segments into a table with the wider one.
+            db.execSQL(createSegments("workout_segments_new"));
+            db.execSQL("INSERT INTO workout_segments_new (_id, workout_id, position, type, duration_s, block_id, block_rounds) "
+                    + "SELECT _id, workout_id, position, type, duration_s, block_id, block_rounds FROM " + TABLE_SEGMENTS);
+            db.execSQL("DROP TABLE " + TABLE_SEGMENTS);
+            db.execSQL("ALTER TABLE workout_segments_new RENAME TO " + TABLE_SEGMENTS);
         }
     }
 

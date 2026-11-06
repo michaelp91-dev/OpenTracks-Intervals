@@ -26,11 +26,17 @@ limitations under the License.
     <string name="workout_save" translatable="false">Save</string>
     <string name="workout_add_segment" translatable="false">Add segment</string>
     <string name="workout_add_rounds" translatable="false">Add rounds</string>
+    <string name="workout_extras" translatable="false">Warm-up jog, prepare, cool-down jog</string>
+    <string name="workout_extras_hint" translatable="false">m:ss, blank or 0 to skip</string>
+    <string name="workout_extras_invalid" translatable="false">Use m:ss, or leave blank to skip</string>
     <string name="workout_name_hint" translatable="false">Workout name</string>
     <string name="workout_duration_hint" translatable="false">m:ss</string>
     <string name="workout_segment_warmup" translatable="false">Warm-up walk</string>
     <string name="workout_segment_run" translatable="false">Run</string>
     <string name="workout_segment_walk" translatable="false">Walk</string>
+    <string name="workout_segment_warmup_jog" translatable="false">Warm-up jog</string>
+    <string name="workout_segment_prepare" translatable="false">Prepare</string>
+    <string name="workout_segment_cooldown_jog" translatable="false">Cool-down jog</string>
     <string name="workout_segment_cooldown" translatable="false">Cool-down walk</string>
     <plurals name="workout_list_summary" translatable="false">
         <item quantity="one">%1$d segment · %2$s</item>

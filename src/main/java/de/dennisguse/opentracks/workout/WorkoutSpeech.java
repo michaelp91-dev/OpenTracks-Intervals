@@ -27,6 +27,10 @@ public final class WorkoutSpeech {
     public static String intervalCue(SegmentType type, Duration duration) {
         String name = type.spoken().toLowerCase(Locale.US);
         String length = spokenLength(duration);
+        if (type == SegmentType.PREPARE) {
+            // "Prepare, 3 minutes" reads better than "3 minute prepare".
+            return length.isEmpty() ? "Prepare" : "Prepare, " + pluralLength(duration);
+        }
         if (length.isEmpty()) {
             return name;
         }
@@ -52,6 +56,24 @@ public final class WorkoutSpeech {
             phrase += ", final round";
         }
         return phrase;
+    }
+
+    /** "3 minutes", "1 minute 30 seconds". */
+    static String pluralLength(Duration duration) {
+        long total = duration == null ? 0 : Math.max(0, duration.getSeconds());
+        long minutes = total / 60;
+        long seconds = total % 60;
+        StringBuilder spoken = new StringBuilder();
+        if (minutes > 0) {
+            spoken.append(minutes).append(minutes == 1 ? " minute" : " minutes");
+        }
+        if (seconds > 0) {
+            if (spoken.length() > 0) {
+                spoken.append(' ');
+            }
+            spoken.append(seconds).append(seconds == 1 ? " second" : " seconds");
+        }
+        return spoken.toString();
     }
 
     /** Minutes and seconds, with a zero part left off. "minute" and "second" stay singular. */
