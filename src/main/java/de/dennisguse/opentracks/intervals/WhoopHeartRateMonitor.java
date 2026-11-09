@@ -60,7 +60,7 @@ public class WhoopHeartRateMonitor {
     private static final String TAG = WhoopHeartRateMonitor.class.getSimpleName();
     private static final UUID HR_SERVICE = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb");
     private static final UUID HR_MEASUREMENT = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb");
-    // WHOOP 4.0 custom service (see GrokDrop/Projects/whoop-ble-protocol.md)
+    // WHOOP 4.0 custom BLE service
     private static final UUID WHOOP_SERVICE = UUID.fromString("61080001-8d6d-82b8-614a-1c8cb0f8dcc6");
     private static final UUID WHOOP_CMD_TO_STRAP = UUID.fromString("61080002-8d6d-82b8-614a-1c8cb0f8dcc6");
     private static final UUID WHOOP_CMD_FROM_STRAP = UUID.fromString("61080003-8d6d-82b8-614a-1c8cb0f8dcc6");
