@@ -25,6 +25,7 @@ import android.content.pm.ServiceInfo;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
@@ -111,6 +112,12 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
     /** Ticks the workout exactly when its timer ends, instead of up to a second later. */
     private final Runnable workoutEndTick = this::updateRecordingDataWhileRecording;
 
+    /**
+     * Ticks the workout exactly on each countdown mark (30, 10, 5..1 s left), independent of the drifting
+     * once-a-second recording tick. Each run reschedules itself from the absolute mark time.
+     */
+    private final Runnable workoutCountdownTick = this::updateRecordingDataWhileRecording;
+
     private final Runnable autoStopFinishedWorkout = () -> {
         if (!isRecording() || !PreferencesUtils.shouldWorkoutAutoStop()) {
             workoutAutoStopScheduled = false;
@@ -155,6 +162,9 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
     private final PocketTracker pocketTracker = new PocketTracker();
 
     private final Runnable countdownTick = this::onCountdownTick;
+    /** {@link SystemClock#elapsedRealtime()} of the first start-countdown word; every later word is a whole second after it. */
+    private long countdownStartElapsed;
+    private int countdownStep;
     private MutableLiveData<String> startCountdownObservable;
     private StartCountdown startCountdown;
     private Long pendingWorkoutId;
@@ -391,8 +401,18 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         if (voiceAnnouncementManager != null) {
             voiceAnnouncementManager.start(null);
         }
+        countdownStartElapsed = SystemClock.elapsedRealtime();
+        countdownStep = 0;
         publishStartCue(startCountdown.begin());
-        handler.postDelayed(countdownTick, 1000);
+        scheduleCountdownTick();
+    }
+
+    /** Fires on the next whole second after the first word; the delay is recomputed from that target, so it never drifts. */
+    private void scheduleCountdownTick() {
+        countdownStep++;
+        long target = countdownStartElapsed + countdownStep * 1000L;
+        long delay = Math.max(0, target - SystemClock.elapsedRealtime());
+        handler.postDelayed(countdownTick, delay);
     }
 
     private void onCountdownTick() {
@@ -408,7 +428,7 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
             return;
         }
         publishStartCue(cue);
-        handler.postDelayed(countdownTick, 1000);
+        scheduleCountdownTick();
     }
 
     private void completeStartCountdown(String goCue) {
@@ -458,7 +478,7 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
             if (cuePlayer != null) {
                 cuePlayer.speakOnly(cue);
             } else if (voiceAnnouncementManager != null) {
-                voiceAnnouncementManager.announceWorkoutCue(cue, false);
+                voiceAnnouncementManager.announceWorkoutCue(cue, false, true);
             }
             return;
         }
@@ -535,6 +555,7 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
         if (handler != null) {
             handler.removeCallbacks(autoStopFinishedWorkout);
             handler.removeCallbacks(workoutEndTick);
+            handler.removeCallbacks(workoutCountdownTick);
         }
         workoutAutoStopScheduled = false;
         Track.Id finishedTrackId = recordingStatus.trackId();
@@ -663,12 +684,20 @@ public class TrackRecordingService extends Service implements TrackPointCreator.
                 notificationManager.setWorkoutStatus(WorkoutBanner.format(this, workoutState));
             }
             if (workoutState != null && workoutState.finished()) {
+                if (handler != null) {
+                    handler.removeCallbacks(workoutCountdownTick);
+                }
                 scheduleWorkoutAutoStop();
             } else if (workoutState != null && handler != null) {
                 long remainingMs = workoutState.total().minus(workoutState.elapsed()).toMillis();
                 if (remainingMs >= 0 && remainingMs < RECORDING_DATA_UPDATE_INTERVAL.toMillis()) {
                     handler.removeCallbacks(workoutEndTick);
                     handler.postDelayed(workoutEndTick, remainingMs);
+                }
+                handler.removeCallbacks(workoutCountdownTick);
+                long untilMarkMs = workoutController.millisUntilNextCountdownMark();
+                if (untilMarkMs >= 0) {
+                    handler.postDelayed(workoutCountdownTick, untilMarkMs);
                 }
             }
         } else {

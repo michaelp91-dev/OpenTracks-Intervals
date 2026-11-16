@@ -119,13 +119,33 @@ public final class WorkoutController {
         if (!engine.isFinished()) {
             WorkoutEngine.Tick tick = engine.onElapsed(elapsed);
             writeClosed(tick.closed(), nowSupplier.get());
-            speak(tick.cue());
+            // Usually one cue; several only when a tick catches up on countdown words, which are then queued in order.
+            for (String cue : tick.spoken()) {
+                speak(cue);
+            }
             if (engine.isFinished()) {
                 sessionStore.clear();
             }
         }
         flushFirstCue();
         publish(elapsed);
+    }
+
+    /**
+     * Milliseconds until the next countdown mark of the current segment, measured on the same
+     * {@link SystemClock#elapsedRealtime()} clock as the timer, or -1 when none is pending.
+     * Recomputed from the absolute mark time on every call, so a timer driven by it never drifts.
+     */
+    public long millisUntilNextCountdownMark() {
+        if (!active || engine == null || engine.isFinished()) {
+            return -1;
+        }
+        Duration elapsed = elapsed();
+        Duration at = engine.nextCountdownMarkAt(elapsed);
+        if (at == null) {
+            return -1;
+        }
+        return Math.max(0, at.minus(elapsed).toMillis());
     }
 
     public void stop(Instant now) {

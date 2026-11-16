@@ -78,6 +78,74 @@ public class WorkoutEngineTest {
     }
 
     @Test
+    public void countdown_tickSpanningTwoMarksSpeaksBothInOrder() {
+        WorkoutEngine engine = new WorkoutEngine(List.of(
+                new WorkoutSegment(SegmentType.RUN, Duration.ofSeconds(30))
+        ));
+        engine.onElapsed(Duration.ZERO);
+        engine.onElapsed(Duration.ofSeconds(15));
+        engine.onElapsed(Duration.ofSeconds(20));
+        assertEquals("5", engine.onElapsed(Duration.ofSeconds(25)).cue());
+        assertEquals("4", engine.onElapsed(Duration.ofMillis(26_000)).cue());
+        assertNull(engine.onElapsed(Duration.ofMillis(26_950)).cue());
+
+        // 3.05 s left, then 1.98 s left: the 1 s tick spans the "3" and "2" marks.
+        WorkoutEngine.Tick spanning = engine.onElapsed(Duration.ofMillis(28_020));
+        assertEquals("3. 2.", spanning.cue());
+        assertEquals(List.of("3", "2"), spanning.spoken());
+        assertEquals(List.of("1"), engine.onElapsed(Duration.ofSeconds(29)).spoken());
+    }
+
+    @Test
+    public void countdown_everyMarkIsSpokenWhateverTheTickPhase() {
+        for (long phaseMs = 0; phaseMs < 1000; phaseMs += 37) {
+            WorkoutEngine engine = new WorkoutEngine(List.of(
+                    new WorkoutSegment(SegmentType.RUN, Duration.ofSeconds(30))
+            ));
+            List<String> words = new ArrayList<>();
+            // A drifting tick: 1003 ms apart, so it slides across the second boundaries.
+            for (long t = phaseMs; t <= 31_000; t += 1003) {
+                for (String part : engine.onElapsed(Duration.ofMillis(t)).spoken()) {
+                    for (String piece : part.split("\\. ")) {
+                        String word = piece.endsWith(".") ? piece.substring(0, piece.length() - 1) : piece;
+                        if (word.matches("[1-5]")) {
+                            words.add(word);
+                        }
+                    }
+                }
+            }
+            assertEquals("phase " + phaseMs, List.of("5", "4", "3", "2", "1"), words);
+        }
+    }
+
+    @Test
+    public void countdown_nextMarkIsOnTheExactSecond() {
+        WorkoutEngine engine = new WorkoutEngine(List.of(
+                new WorkoutSegment(SegmentType.RUN, Duration.ofSeconds(30))
+        ));
+        engine.onElapsed(Duration.ZERO);
+        assertEquals(Duration.ofSeconds(20), engine.nextCountdownMarkAt(Duration.ofMillis(300)));
+        engine.onElapsed(Duration.ofMillis(20_004));
+        assertEquals(Duration.ofSeconds(25), engine.nextCountdownMarkAt(Duration.ofMillis(20_004)));
+        engine.onElapsed(Duration.ofMillis(29_001));
+        assertNull(engine.nextCountdownMarkAt(Duration.ofMillis(29_001)));
+    }
+
+    @Test
+    public void countdown_lateEntryStillSaysOnlyTheLatestMark() {
+        WorkoutEngine engine = new WorkoutEngine(List.of(
+                new WorkoutSegment(SegmentType.RUN, Duration.ofSeconds(10)),
+                new WorkoutSegment(SegmentType.WALK, Duration.ofSeconds(5))
+        ));
+        engine.onElapsed(Duration.ZERO);
+        engine.onElapsed(Duration.ofSeconds(9));
+        // Entering the 5 s walk 1.2 s late (3.8 s left): "5" and "4" are behind us; only "4" is said with the step cue.
+        WorkoutEngine.Tick entry = engine.onElapsed(Duration.ofMillis(11_200));
+        assertEquals("5 second walk. 4.", entry.cue());
+        assertEquals(1, entry.spoken().size());
+    }
+
+    @Test
     public void countdown_shortSegmentDoesNotSayTenSeconds() {
         WorkoutEngine engine = new WorkoutEngine(List.of(
                 new WorkoutSegment(SegmentType.WALK, Duration.ofSeconds(8))

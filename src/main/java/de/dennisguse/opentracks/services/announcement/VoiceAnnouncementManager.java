@@ -173,7 +173,7 @@ public class VoiceAnnouncementManager implements SharedPreferences.OnSharedPrefe
 
     /**
      * Workout cues ignore the device-speaker preference so a run is never silent.
-     * {@link TTSManager#speak} still skips speech during a phone call.
+     * {@link TTSManager#speak} also speaks during a call or voice-assistant session and over other audio.
      */
     public void announceWorkoutCue(@NonNull CharSequence text) {
         announceWorkoutCue(text, true);
@@ -181,12 +181,17 @@ public class VoiceAnnouncementManager implements SharedPreferences.OnSharedPrefe
 
     /** @param fallbackTone false keeps a not-yet-ready TTS silent instead of playing its tone */
     public void announceWorkoutCue(@NonNull CharSequence text, boolean fallbackTone) {
+        announceWorkoutCue(text, fallbackTone, false);
+    }
+
+    /** @param queue true speaks after anything still being said (countdown words) instead of cutting it off */
+    public void announceWorkoutCue(@NonNull CharSequence text, boolean fallbackTone, boolean queue) {
         if (voiceAnnouncement == null) {
             Log.w(TAG, "Cannot announce workout cue; TTS is stopped.");
             return;
         }
         Log.i(TAG, "Workout cue: " + text);
-        voiceAnnouncement.speak(text, fallbackTone);
+        voiceAnnouncement.speak(text, fallbackTone, queue);
     }
 
     public boolean isTtsReady() {

@@ -19,6 +19,7 @@ package de.dennisguse.opentracks.services.announcement;
 
 import android.content.Context;
 import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.speech.tts.TextToSpeech;
@@ -27,8 +28,9 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 
-import java.util.List;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 
 import de.dennisguse.opentracks.R;
 import de.dennisguse.opentracks.settings.PreferencesUtils;
@@ -44,41 +46,53 @@ public class TTSManager {
 
     private final AudioManager audioManager;
 
-    private final AudioManager.OnAudioFocusChangeListener audioFocusChangeListener = new AudioManager.OnAudioFocusChangeListener() {
-        @Override
-        public void onAudioFocusChange(int focusChange) {
-            Log.d(TAG, "Audio focus changed to " + focusChange);
+    /**
+     * Prompts are navigation-style guidance: they duck music and other media instead of waiting for it,
+     * and they still play while a call or voice assistant has the audio mode.
+     */
+    private static final AudioAttributes PROMPT_ATTRIBUTES = new AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build();
 
-            boolean stop = List.of(AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK)
-                    .contains(focusChange);
+    /**
+     * A prompt is short, so it always finishes its sentence: losing focus (another app, a notification,
+     * a navigation voice or the voice assistant) is only logged and never stops speech.
+     */
+    private final AudioManager.OnAudioFocusChangeListener audioFocusChangeListener =
+            focusChange -> Log.d(TAG, "Audio focus changed to " + focusChange + "; prompt keeps playing.");
 
-            if (stop && tts != null && tts.isSpeaking()) {
-                tts.stop();
-                Log.i(TAG, "Aborting current tts due to focus change " + focusChange);
-            }
-        }
-    };
+    private final AudioFocusRequest audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(PROMPT_ATTRIBUTES)
+            .setOnAudioFocusChangeListener(audioFocusChangeListener)
+            .setWillPauseWhenDucked(false)
+            .build();
+
+    /** Utterances queued or speaking; focus is held until the last one finishes, errors or is flushed. */
+    private final Set<String> pendingUtterances = new HashSet<>();
+    private long utteranceCounter;
+    private boolean focusHeld;
 
     private final UtteranceProgressListener utteranceListener = new UtteranceProgressListener() {
         @Override
         public void onStart(String utteranceId) {
-            int result = audioManager.requestAudioFocus(audioFocusChangeListener, AUDIO_STREAM, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK);
-            if (result == AudioManager.AUDIOFOCUS_REQUEST_FAILED) {
-                Log.w(TAG, "Failed to request audio focus.");
-            }
+            // Focus is already requested in speak(), before the utterance starts.
         }
 
         @Override
         public void onDone(String utteranceId) {
-            int result = audioManager.abandonAudioFocus(audioFocusChangeListener);
-            if (result == AudioManager.AUDIOFOCUS_REQUEST_FAILED) {
-                Log.w(TAG, "Failed to relinquish audio focus.");
-            }
+            onUtteranceFinished(utteranceId);
         }
 
         @Override
         public void onError(String utteranceId) {
             Log.e(TAG, "An error occurred for utteranceId " + utteranceId);
+            onUtteranceFinished(utteranceId);
+        }
+
+        @Override
+        public void onStop(String utteranceId, boolean interrupted) {
+            onUtteranceFinished(utteranceId);
         }
     };
 
@@ -107,17 +121,16 @@ public class TTSManager {
                 Log.i(TAG, "TextToSpeech initialized with status " + status);
                 ttsInitStatus = status;
             });
+            tts.setAudioAttributes(PROMPT_ATTRIBUTES);
         }
         if (ttsFallback == null) {
             ttsFallback = MediaPlayer.create(context, R.raw.tts_fallback);
             if (ttsFallback == null) {
                 Log.w(TAG, "MediaPlayer for ttsFallback could not be created.");
             } else {
-                ttsFallback.setAudioAttributes(
-                        new AudioAttributes.Builder()
-                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                                .build());
+                ttsFallback.setAudioAttributes(PROMPT_ATTRIBUTES);
                 ttsFallback.setLooping(false);
+                ttsFallback.setOnCompletionListener(player -> abandonFocusIfIdle());
             }
         }
     }
@@ -127,6 +140,13 @@ public class TTSManager {
     }
 
     public void speak(@NonNull CharSequence announcement, boolean fallbackTone) {
+        speak(announcement, fallbackTone, false);
+    }
+
+    /**
+     * @param queue true adds the announcement after anything still being spoken (countdown words), false flushes it
+     */
+    public void speak(@NonNull CharSequence announcement, boolean fallbackTone, boolean queue) {
         synchronized (this) {
             if (!ttsReady) {
                 ttsReady = ttsInitStatus == TextToSpeech.SUCCESS;
@@ -134,12 +154,6 @@ public class TTSManager {
                     onTtsReady();
                 }
             }
-        }
-
-        if (List.of(AudioManager.MODE_IN_CALL, AudioManager.MODE_IN_COMMUNICATION)
-                .contains(audioManager.getMode())) {
-            Log.i(TAG, "Announcement is not allowed at this time.");
-            return;
         }
 
         if (!ttsReady) {
@@ -151,6 +165,7 @@ public class TTSManager {
                 Log.w(TAG, "MediaPlayer for ttsFallback was not created.");
             } else {
                 Log.i(TAG, "TTS not ready/available, just generating a tone.");
+                requestFocus();
                 ttsFallback.seekTo(0);
                 ttsFallback.start();
             }
@@ -158,12 +173,57 @@ public class TTSManager {
         }
 
         if (announcement.length() > 0) {
-            // We don't care about the utterance id. It is supplied here to force onUtteranceCompleted to be called.
-            tts.speak(announcement, TextToSpeech.QUEUE_FLUSH, null, "not used");
+            // A unique utterance id lets focus be abandoned only after the last queued utterance is done.
+            String utteranceId;
+            synchronized (this) {
+                utteranceId = "prompt-" + (++utteranceCounter);
+                pendingUtterances.add(utteranceId);
+            }
+            requestFocus();
+            int result = tts.speak(announcement, queue ? TextToSpeech.QUEUE_ADD : TextToSpeech.QUEUE_FLUSH, null, utteranceId);
+            if (result == TextToSpeech.ERROR) {
+                onUtteranceFinished(utteranceId);
+            }
+        }
+    }
+
+    /** Asked for before speech starts, so the first syllable is not lost while other audio ducks. */
+    private void requestFocus() {
+        int result = audioManager.requestAudioFocus(audioFocusRequest);
+        if (result == AudioManager.AUDIOFOCUS_REQUEST_FAILED) {
+            Log.w(TAG, "Failed to request audio focus; speaking anyway.");
+            return;
+        }
+        synchronized (this) {
+            focusHeld = true;
+        }
+    }
+
+    private void onUtteranceFinished(String utteranceId) {
+        synchronized (this) {
+            pendingUtterances.remove(utteranceId);
+        }
+        abandonFocusIfIdle();
+    }
+
+    private void abandonFocusIfIdle() {
+        synchronized (this) {
+            if (!focusHeld || !pendingUtterances.isEmpty() || (ttsFallback != null && ttsFallback.isPlaying())) {
+                return;
+            }
+            focusHeld = false;
+        }
+        int result = audioManager.abandonAudioFocusRequest(audioFocusRequest);
+        if (result == AudioManager.AUDIOFOCUS_REQUEST_FAILED) {
+            Log.w(TAG, "Failed to relinquish audio focus.");
         }
     }
 
     public void stop() {
+        synchronized (this) {
+            pendingUtterances.clear();
+        }
+        abandonFocusIfIdle();
         if (tts != null) {
             tts.shutdown();
             tts = null;

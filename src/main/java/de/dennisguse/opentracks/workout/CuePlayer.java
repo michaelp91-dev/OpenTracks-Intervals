@@ -57,7 +57,7 @@ public final class CuePlayer {
     private static final long BARE_WORD_MS = 900;
     private long lastBareSpokenAt;
 
-    /** Speaks right away with no beep, no vibration, and no fallback tone. For 5-4-3-2-1 and "Go". */
+    /** Speaks right away (queued after any word still playing) with no beep, no vibration, and no fallback tone. For 5-4-3-2-1 and "Go". */
     public void speakOnly(CharSequence text) {
         if (text == null || text.length() == 0) {
             return;
@@ -68,7 +68,8 @@ public final class CuePlayer {
         }
         lastBareSpokenAt = SystemClock.elapsedRealtime();
         Log.i(TAG, "Speaking (voice only): " + text);
-        voiceAnnouncementManager.announceWorkoutCue(text, false);
+        // Queued, so a word that is still being spoken is never cut off by the next one.
+        voiceAnnouncementManager.announceWorkoutCue(text, false, true);
     }
 
     public void play(CharSequence text) {
@@ -129,6 +130,7 @@ public final class CuePlayer {
 
     private void beep() {
         try {
+            // STREAM_MUSIC is the stream Android maps navigation-guidance audio to, so the beep matches the voice.
             if (toneGenerator == null) {
                 toneGenerator = new ToneGenerator(AudioManager.STREAM_MUSIC, BEEP_VOLUME);
             }

@@ -21,7 +21,8 @@ import java.util.List;
 import java.util.function.Predicate;
 
 /**
- * Pure timer. A late tick closes every segment it crosses and speaks only the latest cue.
+ * Pure timer. A late tick closes every segment it crosses and speaks only the latest cue,
+ * except that countdown marks crossed between two close ticks are all spoken.
  */
 public final class WorkoutEngine {
 
@@ -59,7 +60,15 @@ public final class WorkoutEngine {
     ) {
     }
 
-    public record Tick(List<ClosedSegment> closed, String cue, Snapshot snapshot) {
+    /**
+     * @param cue    everything said on this tick as one text (null when silent)
+     * @param spoken the same as separate utterances: one entry normally; one per countdown word when a tick
+     *               catches up on several countdown marks and says nothing else, so each word can be queued
+     */
+    public record Tick(List<ClosedSegment> closed, String cue, Snapshot snapshot, List<String> spoken) {
+        public Tick(List<ClosedSegment> closed, String cue, Snapshot snapshot) {
+            this(closed, cue, snapshot, cue == null ? List.of() : List.of(cue));
+        }
     }
 
     private final List<PlannedStep> plan;
@@ -75,6 +84,13 @@ public final class WorkoutEngine {
     private boolean stopped;
     /** Smallest countdown mark already spoken in the current segment. */
     private int countdownAnnounced = Integer.MAX_VALUE;
+    /** Elapsed time of the previous {@link #onElapsed} call, or -1 before the first one. */
+    private long lastElapsedMs = -1;
+    /**
+     * Ticks this close together say every countdown mark they crossed (3.05 s left, then 1.98 s left says "3" and "2").
+     * A longer stall says only the latest mark, like a late entry.
+     */
+    static final long COUNTDOWN_CATCH_UP_MAX_GAP_MS = 2_500L;
     /** Smallest "N minutes left" mark already spoken (or skipped) in the current segment. */
     private int minuteAnnounced = Integer.MAX_VALUE;
     /** Intervals at least this long say every whole minute left. */
@@ -154,8 +170,11 @@ public final class WorkoutEngine {
         }
         nextToClose = lastExclusive;
 
+        long gapMs = lastElapsedMs < 0 ? Long.MAX_VALUE : safe.toMillis() - lastElapsedMs;
+        lastElapsedMs = safe.toMillis();
         boolean crossedHalfway = !halfwayAnnounced && safe.compareTo(timeline.halfway()) >= 0;
         String cue;
+        List<String> spokenParts = null;
         if (nowFinished) {
             cue = completeAnnounced ? null : COMPLETE_CUE;
             completeAnnounced = true;
@@ -192,13 +211,48 @@ public final class WorkoutEngine {
             if (minutes > 0 && !(halfwaySpokenNow && halfwayIsMinuteMark(index, minutes))) {
                 appendPhrase(spoken, minutesLeftPhrase(minutes));
             }
-            int mark = takeCountdown(timeline.endOffset(index).minus(safe), segmentLength(index));
-            if (mark > 0) {
+            boolean lead = spoken.length() > 0;
+            // Entering a segment late keeps only the latest mark; marks already behind us are not spoken.
+            boolean everyMark = !entered && gapMs <= COUNTDOWN_CATCH_UP_MAX_GAP_MS;
+            List<Integer> marks = takeCountdown(timeline.endOffset(index).minus(safe), segmentLength(index), everyMark);
+            for (int mark : marks) {
                 appendPhrase(spoken, countdownPhrase(mark));
             }
             cue = spoken.length() == 0 ? null : spoken.toString();
+            if (!lead && marks.size() > 1) {
+                spokenParts = new ArrayList<>();
+                for (int mark : marks) {
+                    spokenParts.add(countdownPhrase(mark));
+                }
+            }
+        }
+        if (spokenParts != null) {
+            return new Tick(List.copyOf(closed), cue, snapshot(safe), List.copyOf(spokenParts));
         }
         return new Tick(List.copyOf(closed), cue, snapshot(safe));
+    }
+
+    /**
+     * Elapsed time at which the next countdown mark of the current segment is due, so a dedicated timer can fire
+     * exactly on it. Null when no mark is left in this segment (or the plan is over).
+     */
+    public Duration nextCountdownMarkAt(Duration elapsed) {
+        Duration safe = elapsed == null || elapsed.isNegative() ? Duration.ZERO : elapsed;
+        if (stopped || finished) {
+            return null;
+        }
+        int index = timeline.indexAt(safe);
+        if (index < 0 || index >= segments.size() || index != announcedIndex) {
+            return null;
+        }
+        long lengthMs = segmentLength(index).toMillis();
+        for (int mark : COUNTDOWN_MARKS) {
+            if (countdownApplies(mark, lengthMs) && mark < countdownAnnounced) {
+                Duration at = timeline.endOffset(index).minusMillis(mark * 1000L);
+                return at.compareTo(safe) < 0 ? safe : at;
+            }
+        }
+        return null;
     }
 
     /**
@@ -255,6 +309,7 @@ public final class WorkoutEngine {
         completeAnnounced = false;
         finished = false;
         stopped = false;
+        lastElapsedMs = -1;
         countdownAnnounced = Integer.MAX_VALUE;
         minuteAnnounced = Integer.MAX_VALUE;
         skipPassedMinutes(index, safe);
@@ -339,22 +394,26 @@ public final class WorkoutEngine {
     }
 
     /**
-     * Latest countdown mark this segment has reached and not yet spoken.
+     * Countdown marks this segment has reached and not yet spoken, largest first.
      * A mark counts only when the segment is at least that long, so an 8 s segment never says "10 seconds".
+     *
+     * @param everyMark true returns every mark crossed since the last tick; false only the latest one
      */
-    private int takeCountdown(Duration remaining, Duration segmentLength) {
+    private List<Integer> takeCountdown(Duration remaining, Duration segmentLength, boolean everyMark) {
         long remainingMs = remaining == null ? 0 : Math.max(0, remaining.toMillis());
         long lengthMs = segmentLength == null ? 0 : Math.max(0, segmentLength.toMillis());
-        int chosen = 0;
+        List<Integer> crossed = new ArrayList<>();
         for (int mark : COUNTDOWN_MARKS) {
             if (countdownApplies(mark, lengthMs) && remainingMs <= mark * 1000L && mark < countdownAnnounced) {
-                chosen = mark;
+                crossed.add(mark);
             }
         }
-        if (chosen > 0) {
-            countdownAnnounced = chosen;
+        if (crossed.isEmpty()) {
+            return crossed;
         }
-        return chosen;
+        int latest = crossed.get(crossed.size() - 1);
+        countdownAnnounced = latest;
+        return everyMark ? crossed : List.of(latest);
     }
 
     /** A 30-second warning is skipped when the interval itself is 30 seconds or shorter. */
