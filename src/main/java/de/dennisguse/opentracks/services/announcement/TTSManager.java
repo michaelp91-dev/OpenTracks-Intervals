@@ -22,6 +22,7 @@ import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -31,7 +32,11 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 
+import java.io.File;
+import java.io.IOException;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import de.dennisguse.opentracks.R;
 import de.dennisguse.opentracks.settings.PreferencesUtils;
@@ -48,13 +53,24 @@ public class TTSManager {
     private final AudioManager audioManager;
 
     /**
-     * Prompts are navigation-style guidance: they duck music and other media instead of waiting for it,
-     * and they still play while a call or voice assistant has the audio mode.
+     * Focus is asked for as navigation-style guidance, so music and other media duck instead of pausing.
      */
     private static final AudioAttributes PROMPT_ATTRIBUTES = new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build();
+
+    /**
+     * Voice is played exactly like the workout beep (CuePlayer's ToneGenerator on STREAM_MUSIC): same stream,
+     * same app, same route and volume. Speaking straight through the TTS engine plays from the engine's own
+     * process with navigation-guidance attributes, which Android routes and attenuates differently during a
+     * call or voice-assistant session; that is why the beep was loud while the words were not.
+     */
+    static final AudioAttributes PLAYBACK_ATTRIBUTES = new AudioAttributes.Builder()
+            .setLegacyStreamType(AudioManager.STREAM_MUSIC)
+            .build();
+
+    private static final String DIRECT_SUFFIX = "-direct";
 
     /**
      * A prompt is short, so it always finishes its sentence: losing focus (another app, a notification,
@@ -92,20 +108,38 @@ public class TTSManager {
 
         @Override
         public void onDone(String utteranceId) {
-            onUtteranceFinished(utteranceId);
+            if (isDirect(utteranceId)) {
+                onUtteranceFinished(promptId(utteranceId));
+                return;
+            }
+            handler.post(() -> onSynthesized(utteranceId));
         }
 
         @Override
         public void onError(String utteranceId) {
             Log.e(TAG, "An error occurred for utteranceId " + utteranceId);
-            onUtteranceFinished(utteranceId);
+            if (isDirect(utteranceId)) {
+                onUtteranceFinished(promptId(utteranceId));
+                return;
+            }
+            handler.post(() -> onSynthesisFailed(utteranceId));
         }
 
         @Override
         public void onStop(String utteranceId, boolean interrupted) {
-            onUtteranceFinished(utteranceId);
+            if (isDirect(utteranceId)) {
+                onUtteranceFinished(promptId(utteranceId));
+                return;
+            }
+            handler.post(() -> onSynthesisStopped(utteranceId));
         }
     };
+
+    /** Synthesized prompts waiting to play, in the order they were asked for. */
+    private final PromptPlaybackQueue<File> playbackQueue = new PromptPlaybackQueue<>();
+    /** Text per prompt, kept until it plays so a failed synthesis can still be spoken directly. */
+    private final java.util.HashMap<String, CharSequence> promptTexts = new java.util.HashMap<>();
+    private MediaPlayer promptPlayer;
 
     private TextToSpeech tts;
     // Response from TTS after its initialization
@@ -150,14 +184,15 @@ public class TTSManager {
                 Log.i(TAG, "TextToSpeech initialized with status " + status);
                 ttsInitStatus = status;
             });
-            tts.setAudioAttributes(PROMPT_ATTRIBUTES);
+            // Only used if synthesizing to a file fails; still the beep's stream.
+            tts.setAudioAttributes(PLAYBACK_ATTRIBUTES);
         }
         if (ttsFallback == null) {
             ttsFallback = MediaPlayer.create(context, R.raw.tts_fallback);
             if (ttsFallback == null) {
                 Log.w(TAG, "MediaPlayer for ttsFallback could not be created.");
             } else {
-                ttsFallback.setAudioAttributes(PROMPT_ATTRIBUTES);
+                ttsFallback.setAudioAttributes(PLAYBACK_ATTRIBUTES);
                 ttsFallback.setLooping(false);
                 ttsFallback.setOnCompletionListener(player -> onFallbackToneFinished());
             }
@@ -222,10 +257,168 @@ public class TTSManager {
             // A flush drops older utterances right away instead of relying on onStop() for each of them.
             focusTracker.begin(utteranceId, !queue);
             scheduleFocusTimeout(utteranceId, announcement.length());
-            int result = tts.speak(announcement, queue ? TextToSpeech.QUEUE_ADD : TextToSpeech.QUEUE_FLUSH, null, utteranceId);
-            if (result == TextToSpeech.ERROR) {
-                onUtteranceFinished(utteranceId);
+            if (!queue) {
+                flushPlayback();
             }
+            File file = promptFile(utteranceId);
+            synchronized (this) {
+                promptTexts.put(utteranceId, announcement);
+            }
+            playbackQueue.request(utteranceId);
+            Bundle params = new Bundle();
+            params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f);
+            // The words are rendered to a file and then played like the beep (see PLAYBACK_ATTRIBUTES).
+            int result = file == null ? TextToSpeech.ERROR : tts.synthesizeToFile(announcement, params, file, utteranceId);
+            if (result == TextToSpeech.ERROR) {
+                Log.w(TAG, "Could not synthesize prompt to a file; speaking it directly.");
+                handler.post(() -> onSynthesisFailed(utteranceId));
+            }
+        }
+    }
+
+    private static boolean isDirect(String utteranceId) {
+        return utteranceId != null && utteranceId.endsWith(DIRECT_SUFFIX);
+    }
+
+    private static String promptId(String utteranceId) {
+        return isDirect(utteranceId) ? utteranceId.substring(0, utteranceId.length() - DIRECT_SUFFIX.length()) : utteranceId;
+    }
+
+    private File promptFile(String utteranceId) {
+        File dir = new File(context.getCacheDir(), "tts");
+        if (!dir.isDirectory() && !dir.mkdirs()) {
+            Log.w(TAG, "Could not create " + dir);
+            return null;
+        }
+        return new File(dir, utteranceId + ".wav");
+    }
+
+    /** Main thread. */
+    private void onSynthesized(String utteranceId) {
+        File file = promptFile(utteranceId);
+        if (file == null || !file.isFile() || file.length() == 0) {
+            onSynthesisFailed(utteranceId);
+            return;
+        }
+        if (!playbackQueue.ready(utteranceId, file)) {
+            // Flushed while it was being synthesized.
+            deleteQuietly(file);
+            forgetText(utteranceId);
+            return;
+        }
+        playNext();
+    }
+
+    /** Main thread: speak this one prompt straight through the engine (still on the beep's stream). */
+    private void onSynthesisFailed(String utteranceId) {
+        CharSequence text;
+        synchronized (this) {
+            text = promptTexts.remove(utteranceId);
+        }
+        deleteQuietly(promptFile(utteranceId));
+        if (!playbackQueue.cancel(utteranceId) || text == null || tts == null) {
+            onUtteranceFinished(utteranceId);
+            playNext();
+            return;
+        }
+        if (tts.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId + DIRECT_SUFFIX) == TextToSpeech.ERROR) {
+            onUtteranceFinished(utteranceId);
+        }
+        playNext();
+    }
+
+    /** Main thread. */
+    private void onSynthesisStopped(String utteranceId) {
+        deleteQuietly(promptFile(utteranceId));
+        forgetText(utteranceId);
+        playbackQueue.cancel(utteranceId);
+        onUtteranceFinished(utteranceId);
+        playNext();
+    }
+
+    /** Main thread: plays the oldest ready prompt if nothing is playing. */
+    private void playNext() {
+        Map.Entry<String, File> next = playbackQueue.next();
+        if (next == null) {
+            return;
+        }
+        String utteranceId = next.getKey();
+        File file = next.getValue();
+        forgetText(utteranceId);
+        MediaPlayer player = new MediaPlayer();
+        try {
+            player.setAudioAttributes(PLAYBACK_ATTRIBUTES);
+            player.setDataSource(file.getAbsolutePath());
+            player.setVolume(1.0f, 1.0f);
+            player.setOnCompletionListener(p -> onPromptPlayed(p, utteranceId, file));
+            player.setOnErrorListener((p, what, extra) -> {
+                Log.w(TAG, "Prompt playback error " + what + "/" + extra);
+                onPromptPlayed(p, utteranceId, file);
+                return true;
+            });
+            player.prepare();
+            promptPlayer = player;
+            player.start();
+        } catch (IOException | RuntimeException e) {
+            Log.w(TAG, "Could not play prompt", e);
+            onPromptPlayed(player, utteranceId, file);
+        }
+    }
+
+    /** Main thread. */
+    private void onPromptPlayed(MediaPlayer player, String utteranceId, File file) {
+        if (promptPlayer == player) {
+            promptPlayer = null;
+        }
+        player.release();
+        deleteQuietly(file);
+        playbackQueue.finished(utteranceId);
+        onUtteranceFinished(utteranceId);
+        playNext();
+    }
+
+    /** Drops every prompt not yet spoken and cuts off the one playing (QUEUE_FLUSH). */
+    private void flushPlayback() {
+        if (tts != null) {
+            // Pending syntheses report onStop(); they are already dropped below.
+            tts.stop();
+        }
+        List<Map.Entry<String, File>> dropped = playbackQueue.flush();
+        for (Map.Entry<String, File> e : dropped) {
+            forgetText(e.getKey());
+            deleteQuietly(e.getValue() != null ? e.getValue() : promptFile(e.getKey()));
+            onUtteranceFinished(e.getKey());
+        }
+        Runnable stopPlaying = () -> {
+            MediaPlayer player = promptPlayer;
+            String playing = playbackQueue.playing();
+            if (player != null && playing != null) {
+                promptPlayer = null;
+                try {
+                    player.stop();
+                } catch (IllegalStateException ignored) {
+                    // Already stopped.
+                }
+                player.release();
+                deleteQuietly(promptFile(playing));
+                playbackQueue.finished(playing);
+                onUtteranceFinished(playing);
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            stopPlaying.run();
+        } else {
+            handler.post(stopPlaying);
+        }
+    }
+
+    private synchronized void forgetText(String utteranceId) {
+        promptTexts.remove(utteranceId);
+    }
+
+    private static void deleteQuietly(File file) {
+        if (file != null && file.exists() && !file.delete()) {
+            Log.w(TAG, "Could not delete " + file);
         }
     }
 
@@ -259,6 +452,29 @@ public class TTSManager {
         }
         // Always release focus, even if the fallback tone is still playing (it is released below).
         focusTracker.reset();
+        for (Map.Entry<String, File> e : playbackQueue.flush()) {
+            deleteQuietly(e.getValue() != null ? e.getValue() : promptFile(e.getKey()));
+        }
+        synchronized (this) {
+            promptTexts.clear();
+        }
+        Runnable releasePlayer = () -> {
+            MediaPlayer player = promptPlayer;
+            String playing = playbackQueue.playing();
+            promptPlayer = null;
+            if (player != null) {
+                player.release();
+            }
+            if (playing != null) {
+                deleteQuietly(promptFile(playing));
+                playbackQueue.finished(playing);
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            releasePlayer.run();
+        } else {
+            handler.post(releasePlayer);
+        }
         if (tts != null) {
             tts.shutdown();
             tts = null;

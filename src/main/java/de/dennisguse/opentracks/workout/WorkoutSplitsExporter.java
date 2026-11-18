@@ -28,6 +28,7 @@ import java.util.List;
 
 import de.dennisguse.opentracks.data.ContentProviderUtils;
 import de.dennisguse.opentracks.data.models.Track;
+import de.dennisguse.opentracks.io.file.exporter.ExportDirectories;
 import de.dennisguse.opentracks.settings.PreferencesUtils;
 import de.dennisguse.opentracks.util.IntentUtils;
 
@@ -50,16 +51,16 @@ public final class WorkoutSplitsExporter {
             if (!repository.hasWorkout(trackId) && pocketEvents == null) {
                 return;
             }
-            Uri directoryUri = PreferencesUtils.getDefaultExportDirectoryUri();
-            DocumentFile directory = IntentUtils.toDocumentFile(appContext, directoryUri);
-            if (directory == null || !directory.canWrite()) {
-                Log.w(TAG, "No writable export directory; workout splits file was not written");
-                return;
-            }
             ContentProviderUtils contentProviderUtils = new ContentProviderUtils(appContext);
             Track track = contentProviderUtils.getTrack(trackId);
             if (track == null) {
                 Log.w(TAG, "Track " + trackId.id() + " is missing; workout splits file was not written");
+                return;
+            }
+            // Same folder as the track export: Runs for running, Walks otherwise.
+            DocumentFile directory = ExportDirectories.forTrack(appContext, track);
+            if (directory == null || !directory.canWrite()) {
+                Log.w(TAG, "No writable export directory; workout splits file was not written");
                 return;
             }
             String filename = PreferencesUtils.getTrackFileformatGenerator().splitsFilename(track);

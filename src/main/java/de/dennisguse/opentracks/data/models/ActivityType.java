@@ -126,8 +126,12 @@ public enum ActivityType {
         return showSpeedPreferred;
     }
 
+    /** The only activity types the pickers offer; walking exports to Walks, running to Runs. */
+    public static final List<ActivityType> PICKER_TYPES = List.of(WALKING, RUNNING);
+
+    /** Localized names for the activity type pickers: only {@link #PICKER_TYPES}. */
     public static List<String> getLocalizedStrings(Context context) {
-        return Arrays.stream(values())
+        return PICKER_TYPES.stream()
                 .map(ActivityType::getLocalizedStringId)
                 .map(context::getString)
                 .toList();

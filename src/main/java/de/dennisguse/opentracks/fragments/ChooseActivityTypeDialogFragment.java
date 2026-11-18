@@ -32,29 +32,8 @@ public class ChooseActivityTypeDialogFragment extends DialogFragment implements 
         new ChooseActivityTypeDialogFragment(activityType).show(fragmentManager, ChooseActivityTypeDialogFragment.CHOOSE_ACTIVITY_TYPE_DIALOG_TAG);
     }
 
-    private static final List<ActivityType> activityTypes = List.of(
-            ActivityType.UNKNOWN,
-            ActivityType.AIRPLANE,
-            ActivityType.BIKING,
-            ActivityType.MOUNTAIN_BIKING,
-            ActivityType.MOTOR_BIKE,
-            ActivityType.KAYAKING,
-            ActivityType.BOAT,
-            ActivityType.SAILING,
-            ActivityType.DRIVING,
-            ActivityType.RUNNING,
-            ActivityType.SNOW_BOARDING,
-            ActivityType.SKIING,
-            ActivityType.WALKING,
-            ActivityType.KICKSCOOTER,
-            ActivityType.ESCOOTER,
-            ActivityType.INLINE_SKATING,
-            ActivityType.SKATE_BOARDING,
-            ActivityType.CLIMBING,
-            ActivityType.SWIMMING,
-            ActivityType.SWIMMING_OPEN,
-            ActivityType.WORKOUT
-    );
+    /** Only walking and running are offered (they decide the Walks or Runs export folder). */
+    private static final List<ActivityType> activityTypes = ActivityType.PICKER_TYPES;
 
     private static int getPosition(ActivityType activityType) {
         if (activityType == null) {

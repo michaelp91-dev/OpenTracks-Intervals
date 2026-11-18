@@ -74,7 +74,12 @@ public class ExportUtils {
             return null;
         }
         TrackFileFormat trackFileFormat = PreferencesUtils.getExportTrackFileFormat();
-        DocumentFile directory = IntentUtils.toDocumentFile(context, PreferencesUtils.getDefaultExportDirectoryUri());
+        // Running goes to Runs, walking to Walks (next to each other in the chosen export folder).
+        DocumentFile directory = ExportDirectories.forTrack(context, new ContentProviderUtils(context).getTrack(trackId));
+        if (directory == null) {
+            Log.w(TAG, "No export directory; track was not exported");
+            return null;
+        }
 
         WorkRequest exportRequest = new OneTimeWorkRequest.Builder(ExportWorker.class)
                 .setInputData(new Data.Builder()

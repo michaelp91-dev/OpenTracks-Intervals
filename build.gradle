@@ -136,8 +136,8 @@ android {
             // Personal fork: OpenTracks + interval workouts. Installs alongside upstream.
             dimension 'version'
             applicationId 'dev.mpuckett.opentracks.intervals'
-            versionCode 6770
-            versionName 'v4.30.2'
+            versionCode 6771
+            versionName 'v4.30.3'
             versionNameSuffix '-intervals'
             base.archivesName = "opentracks-intervals"
         }
